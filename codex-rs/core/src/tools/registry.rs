@@ -24,6 +24,7 @@ use crate::tools::handlers::multi_agents_spec::MULTI_AGENT_V1_NAMESPACE;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::lifecycle::notify_tool_finish;
 use crate::tools::lifecycle::notify_tool_start;
+use crate::tools::output_store::StoredToolOutput;
 use crate::tools::router::tool_log_payload;
 use crate::tools::tool_dispatch_trace::ToolDispatchTrace;
 use crate::util::error_or_panic;
@@ -37,6 +38,7 @@ use codex_rollout::state_db;
 use codex_shell_command::parse_command::parse_shell_script;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
+use codex_utils_output_truncation::truncate_text;
 use futures::future::BoxFuture;
 use indexmap::IndexMap;
 use indexmap::map::Entry;
@@ -198,6 +200,55 @@ impl AnyToolResult {
 struct PostToolUseFeedbackOutput {
     original: Box<dyn ToolOutput>,
     model_visible: FunctionToolOutput,
+}
+
+struct RecoverableOutputPreview {
+    original: Box<dyn ToolOutput>,
+    preview: String,
+}
+
+impl ToolOutput for RecoverableOutputPreview {
+    fn log_preview(&self) -> String {
+        self.original.log_preview()
+    }
+
+    fn success_for_logging(&self) -> bool {
+        self.original.success_for_logging()
+    }
+
+    fn contains_external_context(&self) -> bool {
+        self.original.contains_external_context()
+    }
+
+    fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
+        self.original.to_response_item_with_recoverable_preview(
+            call_id,
+            payload,
+            self.preview.clone(),
+        )
+    }
+
+    fn post_tool_use_id(&self, call_id: &str) -> String {
+        self.original.post_tool_use_id(call_id)
+    }
+
+    fn post_tool_use_input(&self, payload: &ToolPayload) -> Option<Value> {
+        self.original.post_tool_use_input(payload)
+    }
+
+    fn post_tool_use_response(&self, call_id: &str, payload: &ToolPayload) -> Option<Value> {
+        self.original.post_tool_use_response(call_id, payload)
+    }
+
+    fn code_mode_result(&self, payload: &ToolPayload) -> Value {
+        self.original
+            .code_mode_result_with_recoverable_preview(payload, self.preview.clone())
+    }
+
+    fn untruncated_text(&self, _payload: &ToolPayload) -> Option<String> {
+        // A retrieval result must not produce a second handle.
+        None
+    }
 }
 
 impl ToolOutput for PostToolUseFeedbackOutput {
@@ -771,9 +822,11 @@ async fn handle_any_tool(
     let payload = invocation.payload.clone();
     let truncation_policy = invocation.turn.model_info.truncation_policy.into();
     let output = tool.handle(invocation.clone()).await?;
-    if output.contains_external_context()
-        && invocation.turn.config.memories.disable_on_external_context
-    {
+    let contains_external_context = output.contains_external_context();
+    let post_tool_use_payload =
+        CoreToolRuntime::post_tool_use_payload(tool, &invocation, output.as_ref());
+    let output = recover_oversized_output(output, &payload, truncation_policy, &invocation).await;
+    if contains_external_context && invocation.turn.config.memories.disable_on_external_context {
         state_db::mark_thread_memory_mode_polluted(
             invocation.session.services.state_db.as_deref(),
             invocation.session.thread_id,
@@ -781,8 +834,6 @@ async fn handle_any_tool(
         )
         .await;
     }
-    let post_tool_use_payload =
-        CoreToolRuntime::post_tool_use_payload(tool, &invocation, output.as_ref());
     Ok(AnyToolResult {
         call_id,
         payload,
@@ -790,6 +841,61 @@ async fn handle_any_tool(
         truncation_policy,
         post_tool_use_payload,
     })
+}
+
+async fn recover_oversized_output(
+    output: Box<dyn ToolOutput>,
+    payload: &ToolPayload,
+    truncation_policy: TruncationPolicy,
+    invocation: &ToolInvocation,
+) -> Box<dyn ToolOutput> {
+    let stored_output = output.recoverable_output();
+    let (stored_output, preview_source) = match stored_output {
+        Some(stored_output) => {
+            let Some(preview_source) = output.untruncated_text(payload) else {
+                return output;
+            };
+            (stored_output, preview_source)
+        }
+        None => {
+            let Some(text) = output.untruncated_text(payload) else {
+                return output;
+            };
+            if truncate_text(&text, truncation_policy) == text {
+                return output;
+            }
+            let Ok(stored_output) = invocation
+                .session
+                .tool_output_store
+                .store_text(text.clone())
+                .await
+            else {
+                return output;
+            };
+            (stored_output, text)
+        }
+    };
+
+    Box::new(RecoverableOutputPreview {
+        original: output,
+        preview: preview_with_handle(&preview_source, &stored_output, truncation_policy),
+    })
+}
+
+fn preview_with_handle(
+    text: &str,
+    stored_output: &StoredToolOutput,
+    truncation_policy: TruncationPolicy,
+) -> String {
+    let guidance = format!(
+        "Full output is available as `{}`. Use tool_output.read or tool_output.search.",
+        stored_output.handle
+    );
+    // Direct tool results include shell metadata in addition to this text.
+    // Reserve room for it so the model-facing history keeps the handle.
+    let preview_budget = truncation_policy.token_budget().saturating_sub(128).max(1);
+    let preview = truncate_text(text, TruncationPolicy::Tokens(preview_budget));
+    format!("{preview}\n\n{guidance}")
 }
 
 fn function_hook_tool_name(invocation: &ToolInvocation) -> HookToolName {

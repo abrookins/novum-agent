@@ -16,6 +16,7 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::function_call_output_content_items_to_text;
 use codex_tools::LoadableToolSpec;
+use codex_tools::RecoverableToolOutput;
 use codex_tools::ToolName;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::approx_token_count;
@@ -102,6 +103,10 @@ impl ToolOutput for McpToolOutput {
 
     fn code_mode_result(&self, payload: &ToolPayload) -> JsonValue {
         self.result.code_mode_result(payload)
+    }
+
+    fn untruncated_text(&self, payload: &ToolPayload) -> Option<String> {
+        self.result.untruncated_text(payload)
     }
 
     fn post_tool_use_input(&self, _payload: &ToolPayload) -> Option<JsonValue> {
@@ -325,6 +330,8 @@ pub struct ExecCommandToolOutput {
     /// Bytes omitted by the output collection cap before model-facing truncation.
     pub output_omitted_bytes: Option<NonZeroUsize>,
     pub hook_command: Option<String>,
+    /// Full shell output captured before the terminal preview buffer.
+    pub recoverable_output: Option<RecoverableToolOutput>,
 }
 
 impl ToolOutput for ExecCommandToolOutput {
@@ -342,6 +349,22 @@ impl ToolOutput for ExecCommandToolOutput {
             payload,
             vec![FunctionCallOutputContentItem::InputText {
                 text: self.response_text(),
+            }],
+            Some(true),
+        )
+    }
+
+    fn to_response_item_with_recoverable_preview(
+        &self,
+        call_id: &str,
+        payload: &ToolPayload,
+        preview: String,
+    ) -> ResponseInputItem {
+        function_tool_response(
+            call_id,
+            payload,
+            vec![FunctionCallOutputContentItem::InputText {
+                text: self.response_text_with_output(preview),
             }],
             Some(true),
         )
@@ -391,10 +414,30 @@ impl ToolOutput for ExecCommandToolOutput {
             max_tokens = (max_tokens / 2).max(1);
         }
     }
+
+    fn code_mode_result_with_recoverable_preview(
+        &self,
+        _payload: &ToolPayload,
+        preview: String,
+    ) -> JsonValue {
+        self.code_mode_result_with_output(preview)
+    }
+
+    fn untruncated_text(&self, _payload: &ToolPayload) -> Option<String> {
+        Some(String::from_utf8_lossy(&self.raw_output).into_owned())
+    }
+
+    fn recoverable_output(&self) -> Option<RecoverableToolOutput> {
+        self.recoverable_output.clone()
+    }
 }
 
 impl ExecCommandToolOutput {
     fn code_mode_result_with_max_tokens(&self, max_tokens: usize) -> JsonValue {
+        self.code_mode_result_with_output(self.truncated_output(max_tokens))
+    }
+
+    fn code_mode_result_with_output(&self, output: String) -> JsonValue {
         #[derive(Serialize)]
         struct UnifiedExecCodeModeResult {
             #[serde(skip_serializing_if = "Option::is_none")]
@@ -415,7 +458,7 @@ impl ExecCommandToolOutput {
             exit_code: self.exit_code,
             session_id: self.process_id,
             original_token_count: self.original_token_count,
-            output: self.truncated_output(max_tokens),
+            output,
         };
 
         serde_json::to_value(result).unwrap_or_else(|err| {
@@ -457,6 +500,10 @@ impl ExecCommandToolOutput {
     }
 
     fn response_text(&self) -> String {
+        self.response_text_with_output(self.truncated_output(self.model_output_max_tokens()))
+    }
+
+    fn response_text_with_output(&self, output: String) -> String {
         let mut sections = Vec::new();
 
         if !self.chunk_id.is_empty() {
@@ -479,7 +526,7 @@ impl ExecCommandToolOutput {
         }
 
         sections.push("Output:".to_string());
-        sections.push(self.truncated_output(self.model_output_max_tokens()));
+        sections.push(output);
 
         sections.join("\n")
     }

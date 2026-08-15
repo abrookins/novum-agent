@@ -106,6 +106,7 @@ async fn exec_command_with_tty(
         .map_or_else(|| turn.cwd.clone(), |workdir| turn.cwd.join(workdir));
     let command = vec!["bash".to_string(), "-lc".to_string(), cmd.to_string()];
     let request = test_exec_request(turn, command.clone(), cwd.clone(), shell_env());
+    let output_stream = session.tool_output_store.start_stream().await.ok();
 
     let process = Arc::new(
         manager
@@ -121,6 +122,7 @@ async fn exec_command_with_tty(
                     .expect("turn environment")
                     .environment
                     .as_ref(),
+                output_stream,
             )
             .await?,
     );
@@ -184,18 +186,27 @@ async fn exec_command_with_tty(
             .store(false, std::sync::atomic::Ordering::Release);
     }
 
+    let truncation_policy: TruncationPolicy = turn.model_info.truncation_policy.into();
+    let recoverable_output = if original_token_count > truncation_policy.token_budget() {
+        process.recoverable_output().await
+    } else {
+        process.discard_recoverable_output().await;
+        None
+    };
+
     Ok(ExecCommandToolOutput {
         event_call_id: context.call_id,
         chunk_id: generate_chunk_id(),
         wall_time,
         raw_output: collected,
-        truncation_policy: turn.model_info.truncation_policy.into(),
+        truncation_policy,
         max_output_tokens: None,
         process_id: response_process_id,
         exit_code,
         original_token_count: Some(original_token_count),
         output_omitted_bytes,
         hook_command: Some(cmd.to_string()),
+        recoverable_output,
     })
 }
 
@@ -285,15 +296,18 @@ async fn blocking_terminate_unified_process(
 ) -> anyhow::Result<Arc<UnifiedExecProcess>> {
     let (wake_tx, _wake_rx) = watch::channel(0);
     Ok(Arc::new(
-        UnifiedExecProcess::from_exec_server_started(StartedExecProcess {
-            process: Arc::new(BlockingTerminateExecProcess {
-                process_id: process_id.to_string().into(),
-                terminate_started,
-                allow_terminate,
-                wake_tx,
-            }),
-            sandbox_type: Some(codex_sandboxing::SandboxType::None),
-        })
+        UnifiedExecProcess::from_exec_server_started(
+            StartedExecProcess {
+                process: Arc::new(BlockingTerminateExecProcess {
+                    process_id: process_id.to_string().into(),
+                    terminate_started,
+                    allow_terminate,
+                    wake_tx,
+                }),
+                sandbox_type: Some(codex_sandboxing::SandboxType::None),
+            },
+            /*output_stream*/ None,
+        )
         .await?,
     ))
 }
@@ -343,6 +357,50 @@ fn head_tail_buffer_default_preserves_prefix_and_suffix() {
     let rendered = buffer.to_bytes();
     assert_eq!(rendered.first(), Some(&b'a'));
     assert!(rendered.ends_with(b"bc"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_stream_handle_retains_output_lost_by_head_tail_buffer() -> anyhow::Result<()>
+{
+    skip_if_sandbox!(Ok(()));
+
+    let (session, turn) = test_session_and_turn().await;
+    let output = exec_command(
+        &session,
+        &turn,
+        "printf '%*s' 600000 '' | tr ' ' H; printf '\\nunique-middle-marker\\n'; printf '%*s' 600000 '' | tr ' ' T",
+        /*yield_time_ms*/ 5_000,
+        /*workdir*/ None,
+    )
+    .await?;
+
+    let preview = String::from_utf8_lossy(&output.raw_output);
+    assert!(!preview.contains("unique-middle-marker"));
+    let stored = output
+        .recoverable_output
+        .expect("oversized output should have a recoverable handle");
+    let read = session
+        .tool_output_store
+        .read(
+            &stored.handle,
+            /*offset*/ 149_990,
+            /*max_tokens*/ 100,
+        )
+        .await?;
+    assert!(read.content.contains("unique-middle-marker"));
+    let search = session
+        .tool_output_store
+        .search(
+            &stored.handle,
+            "unique-middle-marker",
+            /*context_lines*/ 0,
+            /*max_tokens*/ 100,
+        )
+        .await?;
+    assert_eq!(search.total_matches, 1);
+    assert_eq!(search.matches[0].content, "unique-middle-marker");
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -749,6 +807,7 @@ async fn completed_pipe_commands_preserve_exit_code() -> anyhow::Result<()> {
             /*tty*/ false,
             Box::new(NoopSpawnLifecycle),
             &environment,
+            /*output_stream*/ None,
         )
         .await?;
 
@@ -791,6 +850,7 @@ async fn unified_exec_uses_remote_exec_server_when_configured() -> anyhow::Resul
             /*tty*/ true,
             Box::new(NoopSpawnLifecycle),
             remote_test_env.environment(),
+            /*output_stream*/ None,
         )
         .await?;
 
@@ -846,6 +906,7 @@ async fn remote_exec_server_rejects_inherited_fd_launches() -> anyhow::Result<()
                 .expect("turn environment")
                 .environment
                 .as_ref(),
+            /*output_stream*/ None,
         )
         .await
         .expect_err("expected inherited fd rejection");

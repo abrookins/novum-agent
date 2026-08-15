@@ -68,6 +68,7 @@ use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::protocol::TerminalInteractionEvent;
 use codex_sandboxing::SandboxCommand;
 use codex_tools::ToolName;
+use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::approx_tokens_from_byte_count;
 use codex_utils_path_uri::PathUri;
 
@@ -420,8 +421,9 @@ impl UnifiedExecProcessManager {
         context: &UnifiedExecContext,
     ) -> Result<ExecCommandToolOutput, UnifiedExecError> {
         let cwd = request.cwd.clone();
+        let output_stream = context.session.tool_output_store.start_stream().await.ok();
         let process = self
-            .open_session_with_sandbox(&request, cwd.clone(), context)
+            .open_session_with_sandbox(&request, cwd.clone(), context, output_stream)
             .await;
 
         let (process, mut deferred_network_approval) = match process {
@@ -645,18 +647,28 @@ impl UnifiedExecProcessManager {
             (None, exit_code)
         };
 
+        let truncation_policy: TruncationPolicy = context.turn.model_info.truncation_policy.into();
+        let recoverable_output = if original_token_count > truncation_policy.token_budget() {
+            process.recoverable_output().await
+        } else {
+            if response_process_id.is_none() {
+                process.discard_recoverable_output().await;
+            }
+            None
+        };
         let response = ExecCommandToolOutput {
             event_call_id: context.call_id.clone(),
             chunk_id,
             wall_time,
             raw_output: collected,
-            truncation_policy: context.turn.model_info.truncation_policy.into(),
+            truncation_policy,
             max_output_tokens: request.max_output_tokens,
             process_id: response_process_id,
             exit_code,
             original_token_count: Some(original_token_count),
             output_omitted_bytes,
             hook_command: Some(request.hook_command.clone()),
+            recoverable_output,
         };
 
         Ok(response)
@@ -808,6 +820,15 @@ impl UnifiedExecProcessManager {
             }
         };
 
+        let recoverable_output = if original_token_count > request.truncation_policy.token_budget()
+        {
+            process.recoverable_output().await
+        } else {
+            if process_id.is_none() {
+                process.discard_recoverable_output().await;
+            }
+            None
+        };
         let response = ExecCommandToolOutput {
             event_call_id,
             chunk_id,
@@ -820,6 +841,7 @@ impl UnifiedExecProcessManager {
             original_token_count: Some(original_token_count),
             output_omitted_bytes,
             hook_command: Some(hook_command),
+            recoverable_output,
         };
 
         let should_emit_interaction = !request.input.is_empty() || response.process_id.is_some();
@@ -974,6 +996,7 @@ impl UnifiedExecProcessManager {
         tty: bool,
         spawn_lifecycle: SpawnLifecycleHandle,
         environment: &codex_exec_server::Environment,
+        output_stream: Option<crate::tools::output_store::ToolOutputStream>,
     ) -> Result<UnifiedExecProcess, ToolError> {
         let mut request = if environment.is_remote() {
             attempt.env_for_exec_server(command, options)
@@ -995,6 +1018,7 @@ impl UnifiedExecProcessManager {
             tty,
             spawn_lifecycle,
             environment,
+            output_stream,
         )
         .await
         .map_err(|err| match err {
@@ -1018,6 +1042,7 @@ impl UnifiedExecProcessManager {
         tty: bool,
         mut spawn_lifecycle: SpawnLifecycleHandle,
         environment: &codex_exec_server::Environment,
+        output_stream: Option<crate::tools::output_store::ToolOutputStream>,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
         let inherited_fds = spawn_lifecycle.inherited_fds();
 
@@ -1045,7 +1070,7 @@ impl UnifiedExecProcessManager {
             }
             .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
             spawn_lifecycle.after_spawn();
-            return UnifiedExecProcess::from_exec_server_started(started).await;
+            return UnifiedExecProcess::from_exec_server_started(started, output_stream).await;
         }
 
         // TODO(anp): Keep PathUri through the local PTY/process launch boundary.
@@ -1118,7 +1143,8 @@ impl UnifiedExecProcessManager {
         spawn_lifecycle.after_spawn();
         let spawned =
             spawn_result.map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
-        UnifiedExecProcess::from_spawned(spawned, request.sandbox, spawn_lifecycle).await
+        UnifiedExecProcess::from_spawned(spawned, request.sandbox, spawn_lifecycle, output_stream)
+            .await
     }
 
     pub(super) async fn open_session_with_sandbox(
@@ -1126,6 +1152,7 @@ impl UnifiedExecProcessManager {
         request: &ExecCommandRequest,
         cwd: PathUri,
         context: &UnifiedExecContext,
+        output_stream: Option<crate::tools::output_store::ToolOutputStream>,
     ) -> Result<(UnifiedExecProcess, Option<DeferredNetworkApproval>), UnifiedExecError> {
         let local_policy_env = create_env(
             &context.turn.config.permissions.shell_environment_policy,
@@ -1146,7 +1173,7 @@ impl UnifiedExecProcessManager {
             local_policy_env,
         };
         let mut orchestrator = ToolOrchestrator::new();
-        let mut runtime = UnifiedExecRuntime::new(self, request.shell_mode.clone());
+        let mut runtime = UnifiedExecRuntime::new(self, request.shell_mode.clone(), output_stream);
         let exec_approval_requirement = context
             .session
             .services
@@ -1237,6 +1264,7 @@ impl UnifiedExecProcessManager {
             output_closed,
             output_closed_notify,
             cancellation_token,
+            ..
         } = output;
         let mut collected = HeadTailBuffer::default();
         let mut exit_signal_received = cancellation_token.is_cancelled();

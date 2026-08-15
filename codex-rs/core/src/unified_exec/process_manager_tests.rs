@@ -261,6 +261,7 @@ async fn output_collection_stays_bounded_across_repeated_drains() {
     let cancellation_token = CancellationToken::new();
     let output = OutputHandles {
         output_buffer: Arc::clone(&output_buffer),
+        output_stream: None,
         output_notify: Arc::clone(&output_notify),
         output_closed: Arc::clone(&output_closed),
         output_closed_notify: Arc::clone(&output_closed_notify),
@@ -273,7 +274,7 @@ async fn output_collection_stays_bounded_across_repeated_drains() {
         Instant::now() + Duration::from_secs(5),
     );
     let produce = async {
-        for byte in [b'a', b'b', b'c'] {
+        for byte in *b"abc" {
             output_buffer.lock().await.push_chunk(
                 vec![byte; crate::unified_exec::UNIFIED_EXEC_OUTPUT_MAX_BYTES],
             );
@@ -298,7 +299,7 @@ async fn output_collection_stays_bounded_across_repeated_drains() {
 
     let (collected, ()) = tokio::join!(collect, produce);
     let mut expected = HeadTailBuffer::default();
-    for byte in [b'a', b'b', b'c'] {
+    for byte in *b"abc" {
         expected.push_chunk(vec![
             byte;
             crate::unified_exec::UNIFIED_EXEC_OUTPUT_MAX_BYTES
@@ -329,6 +330,7 @@ async fn output_collection_preserves_omissions_from_drained_buffer() {
     cancellation_token.cancel();
     let output = OutputHandles {
         output_buffer,
+        output_stream: None,
         output_notify,
         output_closed,
         output_closed_notify,

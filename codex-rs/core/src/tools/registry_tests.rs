@@ -2,6 +2,7 @@ use super::*;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use codex_protocol::DEFAULT_FUNCTION_NAMESPACE;
+use codex_protocol::models::FunctionCallOutputBody;
 use futures::future::BoxFuture;
 use pretty_assertions::assert_eq;
 use std::sync::atomic::AtomicUsize;
@@ -649,6 +650,146 @@ fn code_mode_result_truncates_oversized_text() {
     assert!(output.contains("tail-marker"));
     assert!(output.contains("tokens truncated"));
     assert!(!output.contains("middle-marker"));
+}
+
+#[tokio::test]
+async fn oversized_textual_outputs_use_handles_without_recursion() {
+    let (session, turn) = crate::session::tests::make_session_and_context().await;
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    let text = format!(
+        "head-marker\n{}\ntail-marker",
+        "middle-marker\n".repeat(200)
+    );
+
+    for (call_id, payload) in [
+        (
+            "function-call",
+            ToolPayload::Function {
+                arguments: "{}".to_string(),
+            },
+        ),
+        (
+            "custom-call",
+            ToolPayload::Custom {
+                input: "{}".to_string(),
+            },
+        ),
+    ] {
+        let invocation = ToolInvocation {
+            payload: payload.clone(),
+            ..test_invocation(
+                Arc::clone(&session),
+                Arc::clone(&turn),
+                call_id,
+                ToolName::plain("oversized"),
+            )
+        };
+        let output = recover_oversized_output(
+            Box::new(FunctionToolOutput::from_text(text.clone(), Some(true))),
+            &payload,
+            TruncationPolicy::Tokens(/*limit*/ 128),
+            &invocation,
+        )
+        .await;
+
+        let response = output.to_response_item(call_id, &payload);
+        let response_text = match response {
+            ResponseInputItem::FunctionCallOutput { output, .. }
+            | ResponseInputItem::CustomToolCallOutput { output, .. } => {
+                let FunctionCallOutputBody::Text(text) = output.body else {
+                    panic!("recoverable preview should be textual");
+                };
+                text
+            }
+            ResponseInputItem::Message { .. }
+            | ResponseInputItem::McpToolCallOutput { .. }
+            | ResponseInputItem::ToolSearchOutput { .. } => {
+                panic!("recoverable preview should retain function output shape")
+            }
+        };
+        assert!(response_text.contains("Full output"));
+        assert!(response_text.contains("out_"));
+        assert_eq!(output.untruncated_text(&payload), None);
+    }
+}
+
+#[test]
+fn recoverable_exec_preview_keeps_code_mode_result_typed() {
+    let payload = ToolPayload::Function {
+        arguments: "{}".to_string(),
+    };
+    let output = RecoverableOutputPreview {
+        original: Box::new(crate::tools::context::ExecCommandToolOutput {
+            event_call_id: "call-1".to_string(),
+            chunk_id: "chunk-1".to_string(),
+            wall_time: std::time::Duration::from_secs(2),
+            raw_output: b"full output".to_vec(),
+            truncation_policy: TruncationPolicy::Tokens(/*limit*/ 128),
+            max_output_tokens: None,
+            process_id: None,
+            exit_code: Some(0),
+            original_token_count: Some(3),
+            output_omitted_bytes: None,
+            hook_command: Some("echo ok".to_string()),
+            recoverable_output: None,
+        }),
+        preview: "preview with handle".to_string(),
+    };
+
+    assert_eq!(
+        output.code_mode_result(&payload),
+        serde_json::json!({
+            "chunk_id": "chunk-1",
+            "wall_time_seconds": 2.0,
+            "exit_code": 0,
+            "original_token_count": 3,
+            "output": "preview with handle",
+        })
+    );
+}
+
+#[test]
+fn recoverable_preview_does_not_rewrite_mcp_content_arrays() {
+    struct McpContentOutput(ResponseInputItem);
+
+    impl ToolOutput for McpContentOutput {
+        fn log_preview(&self) -> String {
+            String::new()
+        }
+
+        fn success_for_logging(&self) -> bool {
+            true
+        }
+
+        fn to_response_item(&self, _call_id: &str, _payload: &ToolPayload) -> ResponseInputItem {
+            self.0.clone()
+        }
+    }
+
+    let response = ResponseInputItem::McpToolCallOutput {
+        call_id: "call-1".to_string(),
+        output: codex_protocol::mcp::CallToolResult {
+            content: vec![serde_json::json!({
+                "type": "resource_link",
+                "uri": "file:///result.txt",
+            })],
+            structured_content: None,
+            is_error: None,
+            meta: None,
+        },
+    };
+
+    assert_eq!(
+        McpContentOutput(response.clone()).to_response_item_with_recoverable_preview(
+            "call-1",
+            &ToolPayload::Function {
+                arguments: "{}".to_string(),
+            },
+            "preview".to_string(),
+        ),
+        response
+    );
 }
 
 #[tokio::test]

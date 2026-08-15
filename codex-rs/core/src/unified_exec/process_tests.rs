@@ -104,7 +104,7 @@ pub(super) async fn remote_process(
         sandbox_type: Some(sandbox_type),
     };
 
-    UnifiedExecProcess::from_exec_server_started(started)
+    UnifiedExecProcess::from_exec_server_started(started, /*output_stream*/ None)
         .await
         .expect("remote process should start")
 }

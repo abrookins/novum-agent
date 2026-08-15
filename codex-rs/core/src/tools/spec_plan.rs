@@ -29,6 +29,8 @@ use crate::tools::handlers::ShellCommandHandler;
 use crate::tools::handlers::ShellCommandHandlerOptions;
 use crate::tools::handlers::SleepHandler;
 use crate::tools::handlers::TestSyncHandler;
+use crate::tools::handlers::ToolOutputReadHandler;
+use crate::tools::handlers::ToolOutputSearchHandler;
 use crate::tools::handlers::ToolSearchHandlerCache;
 use crate::tools::handlers::ViewImageHandler;
 use crate::tools::handlers::WaitForEnvironmentHandler;
@@ -934,6 +936,9 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
     let turn_context = context.turn_context;
     let features = turn_context.config.features.get();
     let environment_mode = tool_environment_mode(context.environments);
+
+    registry.add(ToolOutputReadHandler);
+    registry.add(ToolOutputSearchHandler);
 
     if turn_context.config.update_plan_enabled {
         registry.add(PlanHandler);

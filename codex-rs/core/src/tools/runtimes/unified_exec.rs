@@ -17,6 +17,7 @@ use crate::shell::ShellType;
 use crate::tools::flat_tool_name;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::NetworkApprovalSpec;
+use crate::tools::output_store::ToolOutputStream;
 use crate::tools::runtimes::RuntimePathPrepends;
 #[cfg(unix)]
 use crate::tools::runtimes::apply_zsh_fork_path_prepend;
@@ -97,6 +98,7 @@ pub struct UnifiedExecApprovalKey {
 pub struct UnifiedExecRuntime<'a> {
     manager: &'a UnifiedExecProcessManager,
     shell_mode: UnifiedExecShellMode,
+    output_stream: Option<ToolOutputStream>,
 }
 
 fn unified_exec_options(
@@ -134,10 +136,15 @@ fn build_unified_exec_sandbox_command(
 
 impl<'a> UnifiedExecRuntime<'a> {
     /// Creates a runtime bound to the shared unified-exec process manager.
-    pub fn new(manager: &'a UnifiedExecProcessManager, shell_mode: UnifiedExecShellMode) -> Self {
+    pub fn new(
+        manager: &'a UnifiedExecProcessManager,
+        shell_mode: UnifiedExecShellMode,
+        output_stream: Option<ToolOutputStream>,
+    ) -> Self {
         Self {
             manager,
             shell_mode,
+            output_stream,
         }
     }
 }
@@ -422,6 +429,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                             req.tty,
                             prepared.spawn_lifecycle,
                             req.turn_environment.environment.as_ref(),
+                            self.output_stream.clone(),
                         )
                         .await
                         .map_err(|err| match err {
@@ -469,6 +477,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 req.tty,
                 Box::new(NoopSpawnLifecycle),
                 req.turn_environment.environment.as_ref(),
+                self.output_stream.clone(),
             )
             .await
     }
@@ -532,7 +541,11 @@ mod tests {
     #[tokio::test]
     async fn approval_key_includes_environment_id() {
         let manager = UnifiedExecProcessManager::default();
-        let runtime = UnifiedExecRuntime::new(&manager, UnifiedExecShellMode::Direct);
+        let runtime = UnifiedExecRuntime::new(
+            &manager,
+            UnifiedExecShellMode::Direct,
+            /*output_stream*/ None,
+        );
         let mut request = test_request(
             SandboxPermissions::UseDefault,
             ExecApprovalRequirement::Skip {
@@ -563,7 +576,11 @@ mod tests {
         let sandbox_cwd = AbsolutePathBuf::try_from(sandbox_dir.path().to_path_buf())
             .expect("absolute sandbox temp dir");
         let manager = UnifiedExecProcessManager::default();
-        let runtime = UnifiedExecRuntime::new(&manager, UnifiedExecShellMode::Direct);
+        let runtime = UnifiedExecRuntime::new(
+            &manager,
+            UnifiedExecShellMode::Direct,
+            /*output_stream*/ None,
+        );
         let request = UnifiedExecRequest {
             command: vec!["pwd".to_string()],
             shell_type: ShellType::Sh,
@@ -604,8 +621,13 @@ mod tests {
                 proposed_execpolicy_amendment: None,
             },
         );
-        let direct_runtime = UnifiedExecRuntime::new(&manager, UnifiedExecShellMode::Direct);
-        let zsh_fork_runtime = UnifiedExecRuntime::new(&manager, zsh_fork_mode());
+        let direct_runtime = UnifiedExecRuntime::new(
+            &manager,
+            UnifiedExecShellMode::Direct,
+            /*output_stream*/ None,
+        );
+        let zsh_fork_runtime =
+            UnifiedExecRuntime::new(&manager, zsh_fork_mode(), /*output_stream*/ None);
 
         assert_eq!(
             direct_runtime.sandbox_permissions(&request),
@@ -629,7 +651,8 @@ mod tests {
                 proposed_execpolicy_amendment: None,
             },
         );
-        let zsh_fork_runtime = UnifiedExecRuntime::new(&manager, zsh_fork_mode());
+        let zsh_fork_runtime =
+            UnifiedExecRuntime::new(&manager, zsh_fork_mode(), /*output_stream*/ None);
 
         assert_eq!(
             zsh_fork_runtime.sandbox_permissions(&request),
@@ -648,7 +671,8 @@ mod tests {
                 proposed_execpolicy_amendment: None,
             },
         );
-        let runtime = UnifiedExecRuntime::new(&manager, zsh_fork_mode());
+        let runtime =
+            UnifiedExecRuntime::new(&manager, zsh_fork_mode(), /*output_stream*/ None);
 
         assert_eq!(
             runtime.exec_approval_requirement(&request),

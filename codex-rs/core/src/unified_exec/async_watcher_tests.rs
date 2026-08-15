@@ -45,8 +45,13 @@ async fn streaming_output_harness() -> anyhow::Result<StreamingOutputHarness> {
         tty: false,
     });
     let process = Arc::new(
-        UnifiedExecProcess::from_spawned(spawned, SandboxType::None, Box::new(NoopSpawnLifecycle))
-            .await?,
+        UnifiedExecProcess::from_spawned(
+            spawned,
+            SandboxType::None,
+            Box::new(NoopSpawnLifecycle),
+            /*output_stream*/ None,
+        )
+        .await?,
     );
     let (session, turn, rx_event) = make_session_and_context_with_rx().await;
     let context = UnifiedExecContext::new(session, turn, "streaming-output-test".to_string());

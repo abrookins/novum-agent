@@ -5885,6 +5885,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         pending_user_message_admissions: Default::default(),
         input_queue: super::input_queue::InputQueue::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
+        tool_output_store: crate::tools::output_store::ToolOutputStore::new()
+            .expect("create tool-output store"),
         services,
         git_enrichment_policy: GitEnrichmentPolicy::Fresh,
         fork_persistence: ForkPersistence::Copied,
@@ -8101,6 +8103,8 @@ where
         pending_user_message_admissions: Default::default(),
         input_queue: super::input_queue::InputQueue::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
+        tool_output_store: crate::tools::output_store::ToolOutputStore::new()
+            .expect("create tool-output store"),
         services,
         git_enrichment_policy: GitEnrichmentPolicy::Fresh,
         fork_persistence: ForkPersistence::Copied,

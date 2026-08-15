@@ -227,6 +227,22 @@ async fn probe(configure_turn: impl FnOnce(&mut TurnContext)) -> ToolPlanProbe {
     probe_with(configure_turn, ToolPlanInputs::default()).await
 }
 
+#[tokio::test]
+async fn tool_output_handle_tools_are_registered_in_their_namespace() {
+    let plan = probe(|_| {}).await;
+    let read = ToolName::namespaced("tool_output", "read").to_string();
+    let search = ToolName::namespaced("tool_output", "search").to_string();
+
+    plan.assert_visible_contains(&["tool_output"]);
+    plan.assert_registered_contains(&[read.as_str(), search.as_str()]);
+    assert_eq!(
+        plan.namespace_function_names("tool_output"),
+        &["read".to_string(), "search".to_string()]
+    );
+    assert_eq!(plan.exposure(&read), ToolExposure::Direct);
+    assert_eq!(plan.exposure(&search), ToolExposure::Direct);
+}
+
 fn set_feature(turn: &mut TurnContext, feature: Feature, enabled: bool) {
     let mut config = (*turn.config).clone();
     if enabled {

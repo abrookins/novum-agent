@@ -339,6 +339,7 @@ impl ExecCommandHandler {
                 original_token_count: None,
                 output_omitted_bytes: None,
                 hook_command: None,
+                recoverable_output: None,
             }));
         }
 
@@ -393,6 +394,7 @@ impl ExecCommandHandler {
                     original_token_count: Some(original_token_count),
                     output_omitted_bytes,
                     hook_command: Some(hook_command),
+                    recoverable_output: None,
                 }))
             }
             Err(err) => Err(FunctionCallError::RespondToModel(format!(

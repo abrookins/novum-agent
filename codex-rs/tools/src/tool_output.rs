@@ -14,6 +14,14 @@ const TELEMETRY_PREVIEW_MAX_BYTES: usize = 2 * 1024;
 const TELEMETRY_PREVIEW_MAX_LINES: usize = 64;
 const TELEMETRY_PREVIEW_TRUNCATION_NOTICE: &str = "[... telemetry preview truncated ...]";
 
+/// Opaque reference to a session-scoped, recoverable textual tool output.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecoverableToolOutput {
+    pub handle: String,
+    pub byte_len: usize,
+    pub token_count: usize,
+}
+
 /// Model-facing output contract returned by executable tool runtimes.
 pub trait ToolOutput: Send {
     fn log_preview(&self) -> String;
@@ -27,6 +35,20 @@ pub trait ToolOutput: Send {
     }
 
     fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem;
+
+    /// Returns the model-visible response after a recoverable-output preview
+    /// replaces its textual content.
+    ///
+    /// Outputs with response metadata can override this to retain it while
+    /// replacing only the recoverable text.
+    fn to_response_item_with_recoverable_preview(
+        &self,
+        call_id: &str,
+        payload: &ToolPayload,
+        preview: String,
+    ) -> ResponseInputItem {
+        replace_response_text(self.to_response_item(call_id, payload), preview)
+    }
 
     /// Returns the tool call id exposed to `PostToolUse` hooks for this output.
     fn post_tool_use_id(&self, call_id: &str) -> String {
@@ -61,6 +83,33 @@ pub trait ToolOutput: Send {
     ) -> JsonValue {
         truncate_code_mode_result(self.code_mode_result(payload), policy)
     }
+
+    /// Returns the Code Mode value after its textual output is replaced with a
+    /// recoverable-output preview.
+    ///
+    /// Outputs with a structured Code Mode contract can override this to keep
+    /// their metadata and replace only their text field.
+    fn code_mode_result_with_recoverable_preview(
+        &self,
+        _payload: &ToolPayload,
+        preview: String,
+    ) -> JsonValue {
+        JsonValue::String(preview)
+    }
+
+    /// Returns lossless textual output suitable for a recoverable handle.
+    ///
+    /// Non-text content is deliberately excluded so image, audio, and mixed
+    /// content outputs retain their existing response representation.
+    fn untruncated_text(&self, payload: &ToolPayload) -> Option<String> {
+        response_input_to_plain_text(self.to_response_item("", payload))
+    }
+
+    /// Returns output that was captured before a transport-specific preview
+    /// discarded its middle bytes.
+    fn recoverable_output(&self) -> Option<RecoverableToolOutput> {
+        None
+    }
 }
 
 impl<T> ToolOutput for Box<T>
@@ -81,6 +130,15 @@ where
 
     fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
         (**self).to_response_item(call_id, payload)
+    }
+
+    fn to_response_item_with_recoverable_preview(
+        &self,
+        call_id: &str,
+        payload: &ToolPayload,
+        preview: String,
+    ) -> ResponseInputItem {
+        (**self).to_response_item_with_recoverable_preview(call_id, payload, preview)
     }
 
     fn post_tool_use_id(&self, call_id: &str) -> String {
@@ -105,6 +163,22 @@ where
         policy: TruncationPolicy,
     ) -> JsonValue {
         (**self).code_mode_result_with_policy(payload, policy)
+    }
+
+    fn code_mode_result_with_recoverable_preview(
+        &self,
+        payload: &ToolPayload,
+        preview: String,
+    ) -> JsonValue {
+        (**self).code_mode_result_with_recoverable_preview(payload, preview)
+    }
+
+    fn untruncated_text(&self, payload: &ToolPayload) -> Option<String> {
+        (**self).untruncated_text(payload)
+    }
+
+    fn recoverable_output(&self) -> Option<RecoverableToolOutput> {
+        (**self).recoverable_output()
     }
 }
 
@@ -222,6 +296,81 @@ fn truncate_code_mode_result(result: JsonValue, policy: TruncationPolicy) -> Jso
             } else {
                 JsonValue::String(truncated)
             }
+        }
+    }
+}
+
+fn response_input_to_plain_text(response: ResponseInputItem) -> Option<String> {
+    match response {
+        ResponseInputItem::FunctionCallOutput { output, .. }
+        | ResponseInputItem::CustomToolCallOutput { output, .. } => body_to_plain_text(output.body),
+        // Preserve raw MCP content arrays. `McpToolOutput` overrides this
+        // method when it adapts textual MCP output to a function-call result.
+        ResponseInputItem::McpToolCallOutput { .. } => None,
+        ResponseInputItem::Message { content, .. } => {
+            let mut texts = Vec::with_capacity(content.len());
+            for item in content {
+                match item {
+                    codex_protocol::models::ContentItem::InputText { text }
+                    | codex_protocol::models::ContentItem::OutputText { text } => texts.push(text),
+                    codex_protocol::models::ContentItem::InputImage { .. }
+                    | codex_protocol::models::ContentItem::InputAudio { .. } => return None,
+                }
+            }
+            Some(texts.join("\n"))
+        }
+        ResponseInputItem::ToolSearchOutput { .. } => None,
+    }
+}
+
+fn replace_response_text(response: ResponseInputItem, text: String) -> ResponseInputItem {
+    match response {
+        ResponseInputItem::FunctionCallOutput {
+            call_id,
+            mut output,
+        } => {
+            output.body = FunctionCallOutputBody::Text(text);
+            ResponseInputItem::FunctionCallOutput { call_id, output }
+        }
+        ResponseInputItem::CustomToolCallOutput {
+            call_id,
+            name,
+            mut output,
+        } => {
+            output.body = FunctionCallOutputBody::Text(text);
+            ResponseInputItem::CustomToolCallOutput {
+                call_id,
+                name,
+                output,
+            }
+        }
+        // MCP content arrays can contain extensions that have no equivalent
+        // FunctionCallOutput representation. Leave them intact instead of
+        // collapsing their representation to a single text item.
+        ResponseInputItem::McpToolCallOutput { .. } => response,
+        ResponseInputItem::Message { role, phase, .. } => ResponseInputItem::Message {
+            role,
+            phase,
+            content: vec![codex_protocol::models::ContentItem::InputText { text }],
+        },
+        ResponseInputItem::ToolSearchOutput { .. } => response,
+    }
+}
+
+fn body_to_plain_text(body: FunctionCallOutputBody) -> Option<String> {
+    match body {
+        FunctionCallOutputBody::Text(text) => Some(text),
+        FunctionCallOutputBody::ContentItems(items) => {
+            let mut texts = Vec::with_capacity(items.len());
+            for item in items {
+                match item {
+                    FunctionCallOutputContentItem::InputText { text } => texts.push(text),
+                    FunctionCallOutputContentItem::InputImage { .. }
+                    | FunctionCallOutputContentItem::InputAudio { .. }
+                    | FunctionCallOutputContentItem::EncryptedContent { .. } => return None,
+                }
+            }
+            Some(texts.join("\n"))
         }
     }
 }

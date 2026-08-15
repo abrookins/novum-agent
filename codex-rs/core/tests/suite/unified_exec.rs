@@ -1671,10 +1671,7 @@ async fn exec_command_clamps_model_requested_max_output_tokens_to_policy() -> Re
     let output = wait_for_raw_unified_exec_output(&test, call_id).await?;
     assert_eq!(output.original_token_count, Some(8_991));
     let output_text = output.output.replace("\r\n", "\n");
-    assert_regex_match(
-        r"^Warning: truncated output \(original token count: 8991\)\nTotal output lines: 999\n\nEXEC-LINE-0001 x{20}\nEXEC-LINE-0002 x{20}\nEXEC-LINE-0003 x{13}…8941 tokens truncated…E-0997 x{20}\nEXEC-LINE-0998 x{20}\nEXEC-LINE-0999 x{20}\n$",
-        &output_text,
-    );
+    assert!(output_text.contains("Full output is available as `out_"));
 
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
@@ -1761,10 +1758,7 @@ async fn write_stdin_clamps_model_requested_max_output_tokens_to_policy() -> Res
     let stdin_output = wait_for_raw_unified_exec_output(&test, stdin_call_id).await?;
     assert_eq!(stdin_output.original_token_count, Some(9_492));
     let stdin_output_text = stdin_output.output.replace("\r\n", "\n");
-    assert_regex_match(
-        r"^Warning: truncated output \(original token count: 9492\)\nTotal output lines: 1000\n\ngo\nSTDIN-LINE-0001 y{20}\nSTDIN-LINE-0002 y{20}\nSTDIN-LINE-0003 yyyy…9442 tokens truncated…7 y{20}\nSTDIN-LINE-0998 y{20}\nSTDIN-LINE-0999 y{20}\n$",
-        &stdin_output_text,
-    );
+    assert!(stdin_output_text.contains("Full output is available as `out_"));
 
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
@@ -3113,10 +3107,7 @@ PY
     let large_output = outputs.get(call_id).expect("missing large output summary");
 
     let output_text = large_output.output.replace("\r\n", "\n");
-    assert!(output_text.starts_with(&format!(
-        "Warning: truncated output (original token count: {expected_original_token_count})\n"
-    )));
-    assert_regex_match(r"\.\.\. \d+ bytes omitted \.\.\.", &output_text);
+    assert!(output_text.contains("Full output is available as `out_"));
     assert!(output_text.contains("HEAD\n"));
     assert!(output_text.contains("TAIL\n"));
     assert_eq!(
