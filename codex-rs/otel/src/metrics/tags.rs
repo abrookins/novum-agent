@@ -35,6 +35,61 @@ pub fn bounded_originator_tag_value(originator: &str) -> &'static str {
         .unwrap_or(OTHER_ORIGINATOR_TAG_VALUE)
 }
 
+/// Return a low-cardinality deployment environment category.
+pub fn bounded_environment_category(environment: &str) -> &'static str {
+    match environment.to_ascii_lowercase().as_str() {
+        "prod" | "production" => "production",
+        "stage" | "staging" => "staging",
+        "dev" | "development" => "development",
+        "test" => "test",
+        "local" => "local",
+        _ => "other",
+    }
+}
+
+/// Return a coarse model family without exporting the configured model name.
+pub fn bounded_model_category(model: &str) -> &'static str {
+    let model = model.to_ascii_lowercase();
+    if model.is_empty() {
+        "none"
+    } else if model.starts_with("gpt-")
+        || model.starts_with("openai.gpt-")
+        || matches!(model.as_str(), "o1" | "o3" | "o4" | "o5")
+        || ["o1-", "o3-", "o4-", "o5-"]
+            .iter()
+            .any(|prefix| model.starts_with(prefix))
+    {
+        "openai"
+    } else {
+        "other"
+    }
+}
+
+/// Return a known reasoning-effort category without preserving custom values.
+pub fn bounded_reasoning_effort_category(reasoning_effort: &str) -> &'static str {
+    match reasoning_effort {
+        "none" => "none",
+        "minimal" => "minimal",
+        "low" => "low",
+        "medium" => "medium",
+        "high" => "high",
+        "xhigh" => "xhigh",
+        "max" => "max",
+        "ultra" => "ultra",
+        _ => "other",
+    }
+}
+
+/// Return a known service-tier category without preserving custom values.
+pub fn bounded_service_tier_category(service_tier: &str) -> &'static str {
+    match service_tier {
+        "fast" | "priority" => "priority",
+        "flex" => "flex",
+        "default" => "default",
+        _ => "other",
+    }
+}
+
 pub struct SessionMetricTagValues<'a> {
     pub auth_mode: Option<&'a str>,
     pub session_source: &'a str,
@@ -80,6 +135,9 @@ mod tests {
     use super::SERVICE_NAME_TAG;
     use super::SESSION_SOURCE_TAG;
     use super::SessionMetricTagValues;
+    use super::bounded_model_category;
+    use super::bounded_reasoning_effort_category;
+    use super::bounded_service_tier_category;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -129,6 +187,28 @@ mod tests {
                 (MODEL_TAG, "gpt-5.1"),
                 (APP_VERSION_TAG, "1.2.3"),
             ]
+        );
+    }
+
+    #[test]
+    fn model_category_does_not_preserve_custom_model_names() {
+        assert_eq!(bounded_model_category("gpt-5.4"), "openai");
+        assert_eq!(bounded_model_category("openai.gpt-5.4"), "openai");
+        assert_eq!(bounded_model_category("private-model-canary"), "other");
+        assert_eq!(bounded_model_category(""), "none");
+    }
+
+    #[test]
+    fn request_categories_do_not_preserve_custom_values() {
+        assert_eq!(bounded_reasoning_effort_category("high"), "high");
+        assert_eq!(
+            bounded_reasoning_effort_category("canary-private-effort"),
+            "other"
+        );
+        assert_eq!(bounded_service_tier_category("priority"), "priority");
+        assert_eq!(
+            bounded_service_tier_category("canary-private-tier"),
+            "other"
         );
     }
 }

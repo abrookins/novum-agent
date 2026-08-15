@@ -119,7 +119,7 @@ async fn handle_spawn_agent(
         &source,
         /*trigger_turn*/ true,
     );
-    let context = AgentCommunicationContext::new(AgentCommunicationKind::Spawn, session.thread_id);
+    let context = AgentCommunicationContext::new(AgentCommunicationKind::Spawn);
     let spawned_agent = Box::pin(
         session
             .services
@@ -161,7 +161,11 @@ async fn handle_spawn_agent(
         },
     )
     .await;
-    let role_tag = role_name.unwrap_or(DEFAULT_ROLE_NAME);
+    let role_tag = if role_name.is_some() {
+        "custom"
+    } else {
+        DEFAULT_ROLE_NAME
+    };
     turn.session_telemetry.counter(
         "codex.multi_agent.spawn",
         /*inc*/ 1,

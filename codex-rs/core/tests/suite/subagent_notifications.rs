@@ -108,13 +108,6 @@ fn decoded_body(req: &wiremock::Request) -> Option<Vec<u8>> {
     }
 }
 
-fn log_field<'a>(line: &'a str, name: &str) -> Option<&'a str> {
-    let prefix = format!("{name}=");
-    line.split_ascii_whitespace()
-        .find_map(|field| field.strip_prefix(&prefix))
-        .map(|value| value.trim_matches('"'))
-}
-
 fn has_subagent_notification(req: &ResponsesRequest) -> bool {
     req.message_input_texts("user")
         .iter()
@@ -1586,18 +1579,29 @@ async fn multi_agent_v2_spawn_sends_agent_message_to_child(
         .lines()
         .find(|line| line.contains("kind=\"spawn\"") && line.contains("state=\"send\""))
         .expect("spawn send event");
-    assert!(send.contains(&format!("sender_thread_id={root_thread_id}")));
-    assert!(send.contains(&format!("receiver_thread_id={child_thread_id}")));
-    let logged_message = if plaintext { "[plaintext]" } else { message };
-    assert!(send.contains(&format!("content=\"{logged_message}\"")));
-
-    let communication_id = log_field(send, "communication_id").expect("communication ID");
-    logs.lines()
-        .find(|line| {
-            line.contains("state=\"receive\"")
-                && log_field(line, "communication_id") == Some(communication_id)
+    assert!(send.contains("content_length="));
+    assert!(send.contains(&format!("encrypted_content_present={}", !plaintext)));
+    assert!(!send.contains(" content="));
+    assert!(!send.contains(message));
+    assert!(!send.contains("[plaintext]"));
+    let communication_logs = logs
+        .lines()
+        .filter_map(|line| {
+            line.split_once("codex_otel.agent_communication:")
+                .map(|(_, event)| event)
         })
-        .expect("correlated receive event");
+        .collect::<Vec<_>>()
+        .join("\n");
+    for direct_identifier in [
+        root_thread_id.to_string(),
+        child_thread_id.to_string(),
+        SPAWN_CALL_ID.to_string(),
+    ] {
+        assert!(!communication_logs.contains(&direct_identifier));
+    }
+    assert!(!communication_logs.contains("communication_id="));
+    assert!(!communication_logs.contains("sender_thread_id="));
+    assert!(!communication_logs.contains("receiver_thread_id="));
 
     Ok(())
 }

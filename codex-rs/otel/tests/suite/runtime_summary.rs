@@ -49,7 +49,7 @@ fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<(
     manager.record_api_request(
         /*attempt*/ 1,
         Some(200),
-        /*error*/ None,
+        /*error_type*/ None,
         Duration::from_millis(300),
         /*auth_header_attached*/ false,
         /*auth_header_name*/ None,
@@ -57,17 +57,13 @@ fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<(
         /*recovery_mode*/ None,
         /*recovery_phase*/ None,
         "/responses",
-        /*request_id*/ None,
-        /*cf_ray*/ None,
         /*auth_error*/ None,
         /*auth_error_code*/ None,
-        /*agent_identity_telemetry*/ None,
     );
     manager.record_websocket_request(
         Duration::from_millis(400),
-        /*error*/ None,
+        /*error_type*/ None,
         /*connection_reused*/ false,
-        /*agent_identity_telemetry*/ None,
     );
     let sse_response: std::result::Result<
         Option<std::result::Result<StreamEvent, eventsource_stream::EventStreamError<&str>>>,

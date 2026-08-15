@@ -295,7 +295,6 @@ impl MetricsClient {
         let MetricsConfig {
             environment,
             service_name,
-            service_version,
             exporter,
             export_interval,
             runtime_reader,
@@ -308,13 +307,16 @@ impl MetricsClient {
         let mut resource_attributes = Vec::with_capacity(4);
         resource_attributes.push(KeyValue::new(
             semconv::attribute::SERVICE_VERSION,
-            service_version,
+            env!("CARGO_PKG_VERSION"),
         ));
-        resource_attributes.push(KeyValue::new(ENV_ATTRIBUTE, environment));
+        resource_attributes.push(KeyValue::new(
+            ENV_ATTRIBUTE,
+            crate::metrics::bounded_environment_category(&environment),
+        ));
         resource_attributes.extend(os_resource_attributes());
 
-        let resource = Resource::builder()
-            .with_service_name(service_name)
+        let resource = Resource::builder_empty()
+            .with_service_name(crate::metrics::bounded_originator_tag_value(&service_name))
             .with_attributes(resource_attributes)
             .build();
 

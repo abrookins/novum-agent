@@ -6,6 +6,11 @@ pub(crate) mod trace_context;
 
 mod otlp;
 mod targets;
+mod trace_sanitizer;
+
+#[cfg(test)]
+#[path = "trace_sanitizer_tests.rs"]
+mod trace_sanitizer_tests;
 
 use crate::metrics::Result as MetricsResult;
 use codex_protocol::auth::AuthMode;

@@ -788,9 +788,9 @@ fn emit_socks_block_decision_audit_event(
     source: NetworkDecisionSource,
     reason: &str,
     protocol: NetworkProtocol,
-    host: &str,
+    _host: &str,
     port: u16,
-    client_addr: Option<&str>,
+    _client_addr: Option<&str>,
 ) {
     emit_block_decision_audit_event(
         state,
@@ -798,10 +798,8 @@ fn emit_socks_block_decision_audit_event(
             source,
             reason,
             protocol,
-            server_address: host,
             server_port: port,
             method: None,
-            client_addr,
         },
     );
 }
@@ -902,17 +900,15 @@ mod tests {
         assert_eq!(event.field("network.policy.decision"), Some("deny"));
         assert_eq!(event.field("network.policy.source"), Some("proxy_state"));
         assert_eq!(
-            event.field("network.policy.reason"),
+            event.field("network.policy.reason_category"),
             Some(REASON_PROXY_DISABLED)
         );
         assert_eq!(
             event.field("network.transport.protocol"),
             Some("socks5_tcp")
         );
-        assert_eq!(event.field("server.address"), Some("example.com"));
-        assert_eq!(event.field("server.port"), Some("443"));
-        assert_eq!(event.field("http.request.method"), Some("none"));
-        assert_eq!(event.field("client.address"), Some("unknown"));
+        assert_eq!(event.field("server.port_category"), Some("https"));
+        assert_eq!(event.field("http.request.method_category"), Some("none"));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -975,17 +971,15 @@ mod tests {
         assert_eq!(event.field("network.policy.decision"), Some("deny"));
         assert_eq!(event.field("network.policy.source"), Some("mode_guard"));
         assert_eq!(
-            event.field("network.policy.reason"),
+            event.field("network.policy.reason_category"),
             Some(REASON_METHOD_NOT_ALLOWED)
         );
         assert_eq!(
             event.field("network.transport.protocol"),
             Some("socks5_tcp")
         );
-        assert_eq!(event.field("server.address"), Some("example.com"));
-        assert_eq!(event.field("server.port"), Some("80"));
-        assert_eq!(event.field("http.request.method"), Some("none"));
-        assert_eq!(event.field("client.address"), Some("unknown"));
+        assert_eq!(event.field("server.port_category"), Some("http"));
+        assert_eq!(event.field("http.request.method_category"), Some("none"));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1148,16 +1142,14 @@ mod tests {
         assert_eq!(event.field("network.policy.decision"), Some("deny"));
         assert_eq!(event.field("network.policy.source"), Some("mode_guard"));
         assert_eq!(
-            event.field("network.policy.reason"),
+            event.field("network.policy.reason_category"),
             Some(REASON_METHOD_NOT_ALLOWED)
         );
         assert_eq!(
             event.field("network.transport.protocol"),
             Some("socks5_udp")
         );
-        assert_eq!(event.field("server.address"), Some("93.184.216.34"));
-        assert_eq!(event.field("server.port"), Some("53"));
-        assert_eq!(event.field("http.request.method"), Some("none"));
-        assert_eq!(event.field("client.address"), Some("unknown"));
+        assert_eq!(event.field("server.port_category"), Some("dns"));
+        assert_eq!(event.field("http.request.method_category"), Some("none"));
     }
 }

@@ -1,6 +1,3 @@
-use codex_protocol::ThreadId;
-use codex_protocol::protocol::InterAgentCommunication;
-
 const AGENT_COMMUNICATION_TARGET: &str = "codex_otel.agent_communication";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,15 +22,17 @@ impl AgentCommunicationKind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AgentCommunicationContext {
     kind: AgentCommunicationKind,
-    sender_thread_id: ThreadId,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct AgentCommunicationTelemetry {
+    pub(crate) content_length: usize,
+    pub(crate) encrypted_content_present: bool,
 }
 
 impl AgentCommunicationContext {
-    pub(crate) fn new(kind: AgentCommunicationKind, sender_thread_id: ThreadId) -> Self {
-        Self {
-            kind,
-            sender_thread_id,
-        }
+    pub(crate) fn new(kind: AgentCommunicationKind) -> Self {
+        Self { kind }
     }
 }
 
@@ -42,35 +41,27 @@ pub(crate) fn logging_enabled() -> bool {
 }
 
 pub(crate) fn emit_agent_communication_send(
-    communication_id: &str,
     context: &AgentCommunicationContext,
-    communication: &InterAgentCommunication,
-    receiver_thread_id: ThreadId,
+    communication: &AgentCommunicationTelemetry,
 ) {
     tracing::info!(
         target: AGENT_COMMUNICATION_TARGET,
         {
             event.name = "codex.agent_communication",
-            communication_id,
             kind = context.kind.as_str(),
             state = "send",
-            sender_thread_id = %context.sender_thread_id,
-            receiver_thread_id = %receiver_thread_id,
-            content = communication
-                .encrypted_content
-                .as_deref()
-                .unwrap_or("[plaintext]"),
+            content_length = communication.content_length,
+            encrypted_content_present = communication.encrypted_content_present,
         },
         "agent communication"
     );
 }
 
-pub(crate) fn emit_agent_communication_receive(communication_id: &str) {
+pub(crate) fn emit_agent_communication_receive() {
     tracing::info!(
         target: AGENT_COMMUNICATION_TARGET,
         {
             event.name = "codex.agent_communication",
-            communication_id,
             state = "receive",
         },
         "agent communication"

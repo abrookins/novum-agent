@@ -400,9 +400,9 @@ fn extension_metrics_preserve_session_metadata_tags() {
                 TelemetryAuthMode::Chatgpt.to_string(),
             ),
             ("component".to_string(), "skills".to_string()),
-            ("model".to_string(), "gpt-5.4".to_string()),
-            ("originator".to_string(), "test_originator".to_string()),
-            ("service_name".to_string(), "test_service".to_string()),
+            ("model".to_string(), "openai".to_string()),
+            ("originator".to_string(), "other".to_string()),
+            ("service_name".to_string(), "other".to_string()),
             ("session_source".to_string(), "cli".to_string()),
         ])
     );
@@ -463,10 +463,7 @@ async fn world_state_extension_metrics_follow_turn_model_switch() {
 
     let snapshot = metrics.snapshot().expect("metrics snapshot");
     let attributes = single_histogram_attributes(&snapshot, "codex.test.extension.turn");
-    assert_eq!(
-        attributes.get("model").map(String::as_str),
-        Some(next_model)
-    );
+    assert_eq!(attributes.get("model").map(String::as_str), Some("openai"));
 }
 
 fn skill_message(text: &str) -> ResponseItem {

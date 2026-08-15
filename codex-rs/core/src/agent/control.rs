@@ -214,8 +214,12 @@ impl AgentControl {
         context: AgentCommunicationContext,
         parent_turn_id: Option<String>,
     ) -> CodexResult<String> {
-        let communication_for_log =
-            crate::agent_communication::logging_enabled().then(|| communication.clone());
+        let communication_telemetry = crate::agent_communication::logging_enabled().then(|| {
+            crate::agent_communication::AgentCommunicationTelemetry {
+                content_length: communication.content.chars().count(),
+                encrypted_content_present: communication.encrypted_content.is_some(),
+            }
+        });
         let parent_turn_id = parent_turn_id.filter(|_| communication.trigger_turn);
         let result = self
             .handle_thread_request_result(
@@ -230,15 +234,8 @@ impl AgentControl {
                     .await,
             )
             .await;
-        if let (Some(communication), Ok(communication_id)) =
-            (communication_for_log, result.as_ref())
-        {
-            crate::agent_communication::emit_agent_communication_send(
-                communication_id,
-                &context,
-                &communication,
-                agent_id,
-            );
+        if let (Some(communication), Ok(_)) = (communication_telemetry, result.as_ref()) {
+            crate::agent_communication::emit_agent_communication_send(&context, &communication);
         }
         result
     }
@@ -524,8 +521,7 @@ impl AgentControl {
                     message,
                     /*trigger_turn*/ false,
                 );
-                let context =
-                    AgentCommunicationContext::new(AgentCommunicationKind::Result, child_thread_id);
+                let context = AgentCommunicationContext::new(AgentCommunicationKind::Result);
                 let _ = control
                     .send_inter_agent_communication(
                         parent_thread_id,

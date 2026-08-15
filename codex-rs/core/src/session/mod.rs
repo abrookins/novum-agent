@@ -1958,8 +1958,7 @@ impl Session {
             message,
             /*trigger_turn*/ false,
         );
-        let context =
-            AgentCommunicationContext::new(AgentCommunicationKind::Result, self.thread_id);
+        let context = AgentCommunicationContext::new(AgentCommunicationKind::Result);
         if let Err(err) = self
             .services
             .agent_control

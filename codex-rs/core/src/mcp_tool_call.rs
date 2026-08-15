@@ -86,7 +86,6 @@ use tracing::Instrument;
 use tracing::Span;
 use tracing::error;
 use tracing::field::Empty;
-use url::Url;
 
 mod telemetry;
 
@@ -97,12 +96,9 @@ use telemetry::record_mcp_call_outcome_span_telemetry;
 
 const MCP_RESULT_TELEMETRY_META_KEY: &str = "codex/telemetry";
 const MCP_RESULT_TELEMETRY_SPAN_KEY: &str = "span";
-const MCP_RESULT_TELEMETRY_TARGET_ID_KEY: &str = "target_id";
 const MCP_RESULT_TELEMETRY_DID_TRIGGER_SERVER_USER_FLOW_KEY: &str = "did_trigger_server_user_flow";
-const MCP_RESULT_TELEMETRY_TARGET_ID_SPAN_ATTR: &str = "codex.mcp.target.id";
 const MCP_RESULT_TELEMETRY_SERVER_USER_FLOW_SPAN_ATTR: &str =
     "codex.mcp.server_user_flow.triggered";
-const MCP_RESULT_TELEMETRY_TARGET_ID_MAX_CHARS: usize = 256;
 const MCP_TOOL_CALL_EVENT_RESULT_MAX_BYTES: usize = DEFAULT_OUTPUT_BYTES_CAP;
 
 /// Handles the specified tool call and dispatches the appropriate MCP tool-call
@@ -478,18 +474,12 @@ async fn handle_approved_mcp_tool_call(
         record_mcp_result_span_telemetry(&Span::current(), &result);
         result
     }
-    .instrument(mcp_tool_call_span(
-        sess,
-        turn_context,
-        McpToolCallSpanFields {
-            server_name: &server,
-            tool_name: &tool_name,
-            call_id,
-            server_origin: server_origin.as_deref(),
-            connector_id,
-            connector_name,
-        },
-    ))
+    .instrument(mcp_tool_call_span(McpToolCallSpanFields {
+        server_name: &server,
+        server_origin: server_origin.as_deref(),
+        connector_present: connector_id.is_some_and(|value| !value.is_empty())
+            || connector_name.is_some_and(|value| !value.is_empty()),
+    }))
     .await;
     if let Err(error) = &result {
         tracing::warn!("MCP tool call error: {error:?}");
@@ -524,65 +514,37 @@ async fn handle_approved_mcp_tool_call(
     }
 }
 
-fn mcp_tool_call_span(
-    session: &Session,
-    turn_context: &TurnContext,
-    fields: McpToolCallSpanFields<'_>,
-) -> Span {
+fn mcp_tool_call_span(fields: McpToolCallSpanFields<'_>) -> Span {
     let transport = match fields.server_origin {
         Some("stdio") => "stdio",
         Some("in_process") => "in_process",
         Some(_) => "streamable_http",
-        None => "",
+        None => "unknown",
     };
-    let span = tracing::info_span!(
+    let server_category = if fields.server_name == CODEX_APPS_MCP_SERVER_NAME {
+        "codex_apps"
+    } else {
+        "custom"
+    };
+    tracing::info_span!(
         "mcp.tools.call",
         otel.kind = "client",
         rpc.system = "jsonrpc",
         rpc.method = "tools/call",
-        mcp.server.name = fields.server_name,
-        mcp.server.origin = fields.server_origin.unwrap_or(""),
+        mcp.server.category = server_category,
         mcp.transport = transport,
-        mcp.connector.id = fields.connector_id.unwrap_or(""),
-        mcp.connector.name = fields.connector_name.unwrap_or(""),
-        tool.name = fields.tool_name,
-        tool.call_id = fields.call_id,
-        conversation.id = %session.thread_id,
-        session.id = %session.thread_id,
-        turn.id = turn_context.sub_id.as_str(),
-        server.address = Empty,
-        server.port = Empty,
-        codex.mcp.target.id = Empty,
+        mcp.connector.present = fields.connector_present,
+        tool.category = if fields.connector_present { "connector" } else { "custom" },
         codex.mcp.server_user_flow.triggered = Empty,
         error.type = Empty,
-        codex.mcp.error.code = Empty,
-    );
-    record_server_fields(&span, fields.server_origin);
-    span
+        codex.mcp.error.category = Empty,
+    )
 }
 
 struct McpToolCallSpanFields<'a> {
     server_name: &'a str,
-    tool_name: &'a str,
-    call_id: &'a str,
     server_origin: Option<&'a str>,
-    connector_id: Option<&'a str>,
-    connector_name: Option<&'a str>,
-}
-
-fn record_server_fields(span: &Span, url: Option<&str>) {
-    let Some(url) = url else {
-        return;
-    };
-    let Ok(parsed) = Url::parse(url) else {
-        return;
-    };
-    if let Some(host) = parsed.host_str() {
-        span.record("server.address", host);
-    }
-    if let Some(port) = parsed.port_or_known_default() {
-        span.record("server.port", port as i64);
-    }
+    connector_present: bool,
 }
 
 fn record_mcp_result_span_telemetry(span: &Span, result: &Result<CallToolResult, String>) {
@@ -601,17 +563,6 @@ fn record_mcp_result_span_telemetry(span: &Span, result: &Result<CallToolResult,
         return;
     };
 
-    if let Some(target_id) = span_telemetry
-        .get(MCP_RESULT_TELEMETRY_TARGET_ID_KEY)
-        .and_then(JsonValue::as_str)
-        .filter(|target_id| !target_id.is_empty())
-    {
-        span.record(
-            MCP_RESULT_TELEMETRY_TARGET_ID_SPAN_ATTR,
-            truncate_str_to_char_boundary(target_id, MCP_RESULT_TELEMETRY_TARGET_ID_MAX_CHARS),
-        );
-    }
-
     if let Some(did_trigger_server_user_flow) = span_telemetry
         .get(MCP_RESULT_TELEMETRY_DID_TRIGGER_SERVER_USER_FLOW_KEY)
         .and_then(JsonValue::as_bool)
@@ -620,13 +571,6 @@ fn record_mcp_result_span_telemetry(span: &Span, result: &Result<CallToolResult,
             MCP_RESULT_TELEMETRY_SERVER_USER_FLOW_SPAN_ATTR,
             did_trigger_server_user_flow,
         );
-    }
-}
-
-fn truncate_str_to_char_boundary(value: &str, max_chars: usize) -> &str {
-    match value.char_indices().nth(max_chars) {
-        Some((index, _)) => &value[..index],
-        None => value,
     }
 }
 

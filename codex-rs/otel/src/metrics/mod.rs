@@ -19,7 +19,11 @@ pub use names::*;
 use std::sync::OnceLock;
 pub use tags::ORIGINATOR_TAG;
 pub use tags::SessionMetricTagValues;
+pub use tags::bounded_environment_category;
+pub use tags::bounded_model_category;
 pub use tags::bounded_originator_tag_value;
+pub use tags::bounded_reasoning_effort_category;
+pub use tags::bounded_service_tier_category;
 
 static GLOBAL_METRICS: OnceLock<MetricsClient> = OnceLock::new();
 static GLOBAL_STATSIG_METRICS_SETTINGS: OnceLock<StatsigMetricsSettings> = OnceLock::new();

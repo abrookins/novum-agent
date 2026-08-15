@@ -294,7 +294,7 @@ pub async fn inter_agent_communication(
     sess.input_queue
         .enqueue_mailbox_communication(communication, parent_turn_id.filter(|_| trigger_turn))
         .await;
-    crate::agent_communication::emit_agent_communication_receive(&sub_id);
+    crate::agent_communication::emit_agent_communication_receive();
     if trigger_turn || sess.has_outstanding_durable_sleep() {
         sess.maybe_start_turn_for_pending_work_with_sub_id(sub_id)
             .await;

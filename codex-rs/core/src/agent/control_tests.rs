@@ -601,7 +601,7 @@ async fn send_inter_agent_communication_without_turn_queues_message_without_trig
         .send_inter_agent_communication(
             thread_id,
             communication.clone(),
-            AgentCommunicationContext::new(AgentCommunicationKind::Message, ThreadId::new()),
+            AgentCommunicationContext::new(AgentCommunicationKind::Message),
             /*parent_turn_id*/ None,
         )
         .await
@@ -766,7 +766,7 @@ async fn ensure_v2_agent_loaded_reloads_registered_unloaded_agent() {
         .send_inter_agent_communication(
             spawned_agent.thread_id,
             communication.clone(),
-            AgentCommunicationContext::new(AgentCommunicationKind::Message, ThreadId::new()),
+            AgentCommunicationContext::new(AgentCommunicationKind::Message),
             /*parent_turn_id*/ None,
         )
         .await

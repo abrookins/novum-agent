@@ -15,7 +15,6 @@ use crate::GenerateAttestationFuture;
 use crate::responses_metadata::CodexResponsesMetadata;
 use crate::test_support::TestCodexResponsesRequestKind;
 use crate::test_support::responses_metadata as test_responses_metadata;
-use codex_api::AgentIdentityTelemetry;
 use codex_api::ApiError;
 use codex_api::ResponseEvent;
 use codex_api::TransportError;
@@ -740,7 +739,6 @@ fn auth_request_telemetry_context_tracks_attached_auth_and_retry_phase() {
     let auth_context = AuthRequestTelemetryContext::new(
         Some(AuthMode::Chatgpt),
         &BearerAuthProvider::for_test(Some("access-token"), Some("workspace-123")),
-        /*agent_identity_telemetry*/ None,
         PendingUnauthorizedRetry::from_recovery(UnauthorizedRecoveryExecution {
             mode: "managed",
             phase: "refresh_token",
@@ -753,27 +751,6 @@ fn auth_request_telemetry_context_tracks_attached_auth_and_retry_phase() {
     assert!(auth_context.retry_after_unauthorized);
     assert_eq!(auth_context.recovery_mode, Some("managed"));
     assert_eq!(auth_context.recovery_phase, Some("refresh_token"));
-}
-
-#[test]
-fn auth_request_telemetry_context_tracks_agent_identity_ids() {
-    let auth_context = AuthRequestTelemetryContext::new(
-        Some(AuthMode::Chatgpt),
-        &BearerAuthProvider::for_test(/*token*/ None, /*account_id*/ None),
-        Some(AgentIdentityTelemetry {
-            agent_id: "agent-runtime-context".to_string(),
-            task_id: "task-run-context".to_string(),
-        }),
-        PendingUnauthorizedRetry::default(),
-    );
-
-    assert_eq!(
-        auth_context.agent_identity_telemetry(),
-        Some(&AgentIdentityTelemetry {
-            agent_id: "agent-runtime-context".to_string(),
-            task_id: "task-run-context".to_string(),
-        })
-    );
 }
 
 fn model_client_with_counting_attestation(

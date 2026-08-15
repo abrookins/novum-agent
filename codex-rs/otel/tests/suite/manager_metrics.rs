@@ -63,8 +63,8 @@ fn manager_attaches_metadata_tags_to_metrics() -> Result<()> {
             "auth_mode".to_string(),
             TelemetryAuthMode::ApiKey.to_string(),
         ),
-        ("model".to_string(), "gpt-5.1".to_string()),
-        ("originator".to_string(), "test_originator".to_string()),
+        ("model".to_string(), "openai".to_string()),
+        ("originator".to_string(), "other".to_string()),
         ("service".to_string(), "codex-cli".to_string()),
         ("session_source".to_string(), "cli".to_string()),
         ("source".to_string(), "tui".to_string()),
@@ -156,10 +156,7 @@ fn manager_attaches_optional_service_name_tag() -> Result<()> {
         _ => panic!("unexpected counter data type"),
     };
 
-    assert_eq!(
-        attrs.get("service_name"),
-        Some(&"my_app_server_client".to_string())
-    );
+    assert_eq!(attrs.get("service_name"), Some(&"other".to_string()));
 
     Ok(())
 }

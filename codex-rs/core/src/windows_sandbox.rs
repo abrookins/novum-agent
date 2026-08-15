@@ -6,7 +6,7 @@ use codex_features::Feature;
 use codex_features::Features;
 use codex_features::FeaturesToml;
 use codex_login::default_client::originator;
-use codex_otel::sanitize_metric_tag_value;
+use codex_otel::bounded_originator_tag_value;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -248,25 +248,16 @@ pub struct WindowsSandboxSetupRequest {
 pub async fn run_windows_sandbox_setup(request: WindowsSandboxSetupRequest) -> anyhow::Result<()> {
     let start = Instant::now();
     let mode = request.mode;
-    let originator_tag = sanitize_metric_tag_value(originator().value.as_str());
+    let originator_tag = bounded_originator_tag_value(originator().value.as_str());
     let result = run_windows_sandbox_setup_and_persist(request).await;
 
     match result {
         Ok(()) => {
-            emit_windows_sandbox_setup_success_metrics(
-                mode,
-                originator_tag.as_str(),
-                start.elapsed(),
-            );
+            emit_windows_sandbox_setup_success_metrics(mode, originator_tag, start.elapsed());
             Ok(())
         }
         Err(err) => {
-            emit_windows_sandbox_setup_failure_metrics(
-                mode,
-                originator_tag.as_str(),
-                start.elapsed(),
-                &err,
-            );
+            emit_windows_sandbox_setup_failure_metrics(mode, originator_tag, start.elapsed(), &err);
             Err(err)
         }
     }
@@ -375,19 +366,8 @@ fn emit_windows_sandbox_setup_failure_metrics(
         #[cfg(target_os = "windows")]
         {
             let mut failure_tags: Vec<(&str, &str)> = vec![("originator", originator_tag)];
-            let mut code_tag: Option<String> = None;
-            let mut message_tag: Option<String> = None;
             if let Some(failure) = codex_windows_sandbox::extract_setup_failure(_err) {
-                code_tag = Some(failure.code.as_str().to_string());
-                message_tag = Some(codex_windows_sandbox::sanitize_setup_metric_tag_value(
-                    &failure.message,
-                ));
-            }
-            if let Some(code) = code_tag.as_deref() {
-                failure_tags.push(("code", code));
-            }
-            if let Some(message) = message_tag.as_deref() {
-                failure_tags.push(("message", message));
+                failure_tags.push(("code", failure.code.as_str()));
             }
             let metric_name =
                 if codex_windows_sandbox::extract_setup_failure(_err).is_some_and(|failure| {

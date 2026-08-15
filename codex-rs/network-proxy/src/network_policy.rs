@@ -1,4 +1,12 @@
+use crate::reasons::REASON_DENIED;
+use crate::reasons::REASON_METHOD_NOT_ALLOWED;
+use crate::reasons::REASON_MITM_HOOK_DENIED;
+use crate::reasons::REASON_MITM_REQUIRED;
+use crate::reasons::REASON_NOT_ALLOWED;
+use crate::reasons::REASON_NOT_ALLOWED_LOCAL;
 use crate::reasons::REASON_POLICY_DENIED;
+use crate::reasons::REASON_PROXY_DISABLED;
+use crate::reasons::REASON_UNIX_SOCKET_UNSUPPORTED;
 use crate::runtime::HostBlockDecision;
 use crate::runtime::HostBlockReason;
 use crate::state::NetworkProxyState;
@@ -16,8 +24,7 @@ const POLICY_SCOPE_NON_DOMAIN: &str = "non_domain";
 const POLICY_DECISION_ALLOW: &str = "allow";
 const POLICY_DECISION_DENY: &str = "deny";
 const POLICY_REASON_ALLOW: &str = "allow";
-const DEFAULT_METHOD: &str = "none";
-const DEFAULT_CLIENT_ADDRESS: &str = "unknown";
+const POLICY_REASON_OTHER: &str = "other";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NetworkProtocol {
@@ -176,10 +183,8 @@ pub(crate) struct BlockDecisionAuditEventArgs<'a> {
     pub source: NetworkDecisionSource,
     pub reason: &'a str,
     pub protocol: NetworkProtocol,
-    pub server_address: &'a str,
     pub server_port: u16,
     pub method: Option<&'a str>,
-    pub client_addr: Option<&'a str>,
 }
 
 pub(crate) fn emit_block_decision_audit_event(
@@ -201,7 +206,6 @@ fn emit_non_domain_policy_decision_audit_event(
     args: BlockDecisionAuditEventArgs<'_>,
     decision: &'static str,
 ) {
-    let execution_id = state.execution_id();
     emit_policy_audit_event(
         state,
         PolicyAuditEventArgs {
@@ -210,11 +214,8 @@ fn emit_non_domain_policy_decision_audit_event(
             source: args.source.as_str(),
             reason: args.reason,
             protocol: args.protocol,
-            server_address: args.server_address,
             server_port: args.server_port,
             method: args.method,
-            client_addr: args.client_addr,
-            execution_id: execution_id.as_deref(),
             policy_override: false,
         },
     );
@@ -226,42 +227,117 @@ struct PolicyAuditEventArgs<'a> {
     source: &'a str,
     reason: &'a str,
     protocol: NetworkProtocol,
-    server_address: &'a str,
     server_port: u16,
     method: Option<&'a str>,
-    client_addr: Option<&'a str>,
-    execution_id: Option<&'a str>,
     policy_override: bool,
 }
 
 fn emit_policy_audit_event(state: &NetworkProxyState, args: PolicyAuditEventArgs<'_>) {
     let metadata = state.audit_metadata();
+    let originator = metadata.originator.as_deref().map(originator_category);
+    let terminal_type = metadata.terminal_type.as_deref().map(terminal_category);
+    let reason_category = policy_reason_category(args.reason);
+    let port_category = server_port_category(args.server_port);
+    let method_category = http_method_category(args.method);
     tracing::event!(
         target: AUDIT_TARGET,
         tracing::Level::INFO,
         event.name = POLICY_DECISION_EVENT_NAME,
         event.timestamp = %audit_timestamp(),
-        conversation.id = metadata.conversation_id.as_deref(),
         app.version = metadata.app_version.as_deref(),
         auth_mode = metadata.auth_mode.as_deref(),
-        originator = metadata.originator.as_deref(),
-        user.account_id = metadata.user_account_id.as_deref(),
-        user.email = metadata.user_email.as_deref(),
-        terminal.type = metadata.terminal_type.as_deref(),
-        model = metadata.model.as_deref(),
-        slug = metadata.slug.as_deref(),
+        originator = originator,
+        terminal.type = terminal_type,
         network.policy.scope = args.scope,
         network.policy.decision = args.decision,
         network.policy.source = args.source,
-        network.policy.reason = args.reason,
+        network.policy.reason_category = reason_category,
         network.transport.protocol = args.protocol.as_policy_protocol(),
-        server.address = args.server_address,
-        server.port = args.server_port,
-        http.request.method = args.method.unwrap_or(DEFAULT_METHOD),
-        client.address = args.client_addr.unwrap_or(DEFAULT_CLIENT_ADDRESS),
-        execution.id = args.execution_id,
+        server.port_category = port_category,
+        http.request.method_category = method_category,
         network.policy.override = args.policy_override,
     );
+}
+
+fn originator_category(originator: &str) -> &'static str {
+    match originator {
+        "codex_desktop" => "codex_desktop",
+        "codex-app-server" => "codex-app-server",
+        "codex_mcp_server" => "codex_mcp_server",
+        "codex_cli_rs" => "codex_cli_rs",
+        "codex-tui" => "codex-tui",
+        "codex_vscode" => "codex_vscode",
+        "none" => "none",
+        "codex_exec" => "codex_exec",
+        "codex-cli" => "codex-cli",
+        "codex_sdk_ts" => "codex_sdk_ts",
+        "codex-app-server-sdk" => "codex-app-server-sdk",
+        _ => "other",
+    }
+}
+
+fn terminal_category(terminal_type: &str) -> &'static str {
+    let family = terminal_type
+        .split_once('/')
+        .map_or(terminal_type, |(family, _)| family)
+        .to_ascii_lowercase();
+    match family.as_str() {
+        "apple_terminal" => "apple_terminal",
+        "ghostty" => "ghostty",
+        "iterm.app" => "iterm2",
+        "warpterminal" => "warp",
+        "vscode" => "vscode",
+        "wezterm" => "wezterm",
+        "kitty" => "kitty",
+        "alacritty" => "alacritty",
+        "konsole" => "konsole",
+        "gnome-terminal" => "gnome_terminal",
+        "vte" => "vte",
+        "windowsterminal" => "windows_terminal",
+        "dumb" => "dumb",
+        "unknown" => "unknown",
+        _ => "other",
+    }
+}
+
+fn policy_reason_category(reason: &str) -> &'static str {
+    match reason {
+        POLICY_REASON_ALLOW => POLICY_REASON_ALLOW,
+        REASON_DENIED => REASON_DENIED,
+        REASON_METHOD_NOT_ALLOWED => REASON_METHOD_NOT_ALLOWED,
+        REASON_MITM_HOOK_DENIED => REASON_MITM_HOOK_DENIED,
+        REASON_MITM_REQUIRED => REASON_MITM_REQUIRED,
+        REASON_NOT_ALLOWED => REASON_NOT_ALLOWED,
+        REASON_NOT_ALLOWED_LOCAL => REASON_NOT_ALLOWED_LOCAL,
+        REASON_POLICY_DENIED => REASON_POLICY_DENIED,
+        REASON_PROXY_DISABLED => REASON_PROXY_DISABLED,
+        REASON_UNIX_SOCKET_UNSUPPORTED => REASON_UNIX_SOCKET_UNSUPPORTED,
+        _ => POLICY_REASON_OTHER,
+    }
+}
+
+fn server_port_category(port: u16) -> &'static str {
+    match port {
+        0 => "none",
+        53 => "dns",
+        80 => "http",
+        443 => "https",
+        1..=1023 => "privileged",
+        1024..=49151 => "registered",
+        49152..=u16::MAX => "dynamic",
+    }
+}
+
+fn http_method_category(method: Option<&str>) -> &'static str {
+    match method {
+        None => "none",
+        Some("GET" | "HEAD") => "read",
+        Some("POST" | "PUT" | "PATCH" | "DELETE") => "write",
+        Some("CONNECT") => "connect",
+        Some("OPTIONS") => "preflight",
+        Some("TRACE") => "diagnostic",
+        Some(_) => "other",
+    }
 }
 
 fn audit_timestamp() -> String {
@@ -365,11 +441,8 @@ pub(crate) async fn evaluate_host_policy(
             source: source.as_str(),
             reason,
             protocol: request.protocol,
-            server_address: request.host.as_str(),
             server_port: request.port,
             method: request.method.as_deref(),
-            client_addr: request.client_addr.as_deref(),
-            execution_id: execution_id.as_deref(),
             policy_override,
         },
     );
@@ -678,14 +751,15 @@ mod tests {
         assert_eq!(event.field("network.policy.decision"), Some("allow"));
         assert_eq!(event.field("network.policy.source"), Some("decider"));
         assert_eq!(
-            event.field("network.policy.reason"),
+            event.field("network.policy.reason_category"),
             Some(REASON_NOT_ALLOWED)
         );
         assert_eq!(event.field("network.transport.protocol"), Some("http"));
-        assert_eq!(event.field("server.address"), Some("example.com"));
-        assert_eq!(event.field("server.port"), Some("80"));
-        assert_eq!(event.field("http.request.method"), Some(DEFAULT_METHOD));
-        assert_eq!(event.field("client.address"), Some(DEFAULT_CLIENT_ADDRESS));
+        assert_eq!(event.field("server.port_category"), Some("http"));
+        assert_eq!(event.field("http.request.method_category"), Some("none"));
+        assert!(!event.fields.contains_key("server.address"));
+        assert!(!event.fields.contains_key("server.port"));
+        assert!(!event.fields.contains_key("client.address"));
         assert_eq!(event.field("network.policy.override"), Some("true"));
         let timestamp = event
             .field("event.timestamp")
@@ -702,7 +776,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn evaluate_host_policy_emits_execution_id_for_baseline_allow() {
+    async fn evaluate_host_policy_omits_execution_id_for_baseline_allow() {
         let state = network_proxy_state_for_policy({
             let mut network = NetworkProxyConfig::default();
             network.set_allowed_domains(vec!["example.com".to_string()]);
@@ -734,11 +808,13 @@ mod tests {
         let event = find_event_by_name(&events, POLICY_DECISION_EVENT_NAME)
             .expect("expected policy decision audit event");
         assert_eq!(event.field("network.policy.decision"), Some("allow"));
-        assert_eq!(
-            event.field("execution.id"),
-            Some("execution-baseline-allow")
+        assert!(!event.fields.contains_key("execution.id"));
+        assert!(
+            event
+                .fields
+                .values()
+                .all(|value| !value.contains("execution-baseline-allow"))
         );
-        assert_ne!(event.field("execution.id"), Some("token-baseline-allow"));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -786,12 +862,15 @@ mod tests {
             event.field("network.policy.source"),
             Some("baseline_policy")
         );
-        assert_eq!(event.field("network.policy.reason"), Some(REASON_DENIED));
+        assert_eq!(
+            event.field("network.policy.reason_category"),
+            Some(REASON_DENIED)
+        );
         assert_eq!(event.field("network.policy.override"), Some("false"));
-        assert_eq!(event.field("http.request.method"), Some("GET"));
-        assert_eq!(event.field("client.address"), Some("127.0.0.1:1234"));
-        assert_eq!(event.field("execution.id"), Some("execution-baseline-deny"));
-        assert_ne!(event.field("execution.id"), Some("token-baseline-deny"));
+        assert_eq!(event.field("server.port_category"), Some("http"));
+        assert_eq!(event.field("http.request.method_category"), Some("read"));
+        assert!(!event.fields.contains_key("client.address"));
+        assert!(!event.fields.contains_key("execution.id"));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -830,7 +909,7 @@ mod tests {
         assert_eq!(event.field("network.policy.decision"), Some("ask"));
         assert_eq!(event.field("network.policy.source"), Some("decider"));
         assert_eq!(
-            event.field("network.policy.reason"),
+            event.field("network.policy.reason_category"),
             Some(REASON_NOT_ALLOWED)
         );
         assert_eq!(event.field("network.policy.override"), Some("false"));
@@ -846,8 +925,8 @@ mod tests {
             originator: Some("codex_cli_rs".to_string()),
             user_email: Some("test@example.com".to_string()),
             terminal_type: Some("iTerm.app/3.6.5".to_string()),
-            model: Some("gpt-5.3-codex".to_string()),
-            slug: Some("gpt-5.3-codex".to_string()),
+            model: Some("canary-private-model".to_string()),
+            slug: Some("canary-private-model-slug".to_string()),
         };
         let state = state_with_metadata(metadata);
         let request = NetworkPolicyRequest::new(NetworkPolicyRequestArgs {
@@ -870,15 +949,19 @@ mod tests {
 
         let event = find_event_by_name(&events, POLICY_DECISION_EVENT_NAME)
             .expect("expected policy decision audit event");
-        assert_eq!(event.field("conversation.id"), Some("conversation-1"));
         assert_eq!(event.field("app.version"), Some("1.2.3"));
         assert_eq!(event.field("auth_mode"), Some("Chatgpt"));
         assert_eq!(event.field("originator"), Some("codex_cli_rs"));
-        assert_eq!(event.field("user.account_id"), Some("acct-1"));
-        assert_eq!(event.field("user.email"), Some("test@example.com"));
-        assert_eq!(event.field("terminal.type"), Some("iTerm.app/3.6.5"));
-        assert_eq!(event.field("model"), Some("gpt-5.3-codex"));
-        assert_eq!(event.field("slug"), Some("gpt-5.3-codex"));
+        assert_eq!(event.field("terminal.type"), Some("iterm2"));
+        for field in [
+            "conversation.id",
+            "user.account_id",
+            "user.email",
+            "model",
+            "slug",
+        ] {
+            assert!(!event.fields.contains_key(field));
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -892,10 +975,8 @@ mod tests {
                     source: NetworkDecisionSource::ModeGuard,
                     reason: REASON_METHOD_NOT_ALLOWED,
                     protocol: NetworkProtocol::Http,
-                    server_address: "unix-socket",
                     server_port: 0,
                     method: Some("POST"),
-                    client_addr: None,
                 },
             );
         })
@@ -914,19 +995,94 @@ mod tests {
         );
         assert_eq!(event.field("network.policy.source"), Some("mode_guard"));
         assert_eq!(
-            event.field("network.policy.reason"),
+            event.field("network.policy.reason_category"),
             Some(REASON_METHOD_NOT_ALLOWED)
         );
         assert_eq!(event.field("network.transport.protocol"), Some("http"));
-        assert_eq!(event.field("server.address"), Some("unix-socket"));
-        assert_eq!(event.field("server.port"), Some("0"));
-        assert_eq!(event.field("http.request.method"), Some("POST"));
-        assert_eq!(event.field("client.address"), Some(DEFAULT_CLIENT_ADDRESS));
+        assert_eq!(event.field("server.port_category"), Some("none"));
+        assert_eq!(event.field("http.request.method_category"), Some("write"));
         assert_eq!(event.field("network.policy.override"), Some("false"));
         assert_eq!(
             find_event_by_name(&events, LEGACY_BLOCK_DECISION_EVENT_NAME),
             None
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn policy_audit_event_omits_sensitive_canaries() {
+        let state = state_with_metadata(NetworkProxyAuditMetadata {
+            conversation_id: Some("canary-network-conversation-id".to_string()),
+            app_version: Some("1.2.3".to_string()),
+            user_account_id: Some("canary-network-account-id".to_string()),
+            auth_mode: Some("Chatgpt".to_string()),
+            originator: Some("codex_cli_rs".to_string()),
+            user_email: Some("canary-network@example.com".to_string()),
+            terminal_type: Some("tty".to_string()),
+            model: Some("gpt-5.3-codex".to_string()),
+            slug: Some("gpt-5.3-codex".to_string()),
+        });
+        state.register_execution(
+            "canary-network-token",
+            "local",
+            "canary-network-execution-id",
+        );
+        let state = state
+            .for_execution_token("canary-network-token")
+            .expect("expected registered execution");
+
+        let (_, events) = capture_events(|| async {
+            emit_block_decision_audit_event(
+                &state,
+                BlockDecisionAuditEventArgs {
+                    source: NetworkDecisionSource::ModeGuard,
+                    reason: "canary arbitrary policy reason",
+                    protocol: NetworkProtocol::Http,
+                    server_port: 8443,
+                    method: Some("POST"),
+                },
+            );
+        })
+        .await;
+
+        let event = find_event_by_name(&events, POLICY_DECISION_EVENT_NAME)
+            .expect("expected policy decision audit event");
+        assert_eq!(event.field("network.policy.decision"), Some("deny"));
+        assert_eq!(event.field("network.policy.source"), Some("mode_guard"));
+        assert_eq!(event.field("network.transport.protocol"), Some("http"));
+        assert_eq!(
+            event.field("network.policy.reason_category"),
+            Some(POLICY_REASON_OTHER)
+        );
+        assert_eq!(event.field("server.port_category"), Some("registered"));
+        assert_eq!(event.field("http.request.method_category"), Some("write"));
+        assert_eq!(event.field("network.policy.override"), Some("false"));
+        for field in [
+            "conversation.id",
+            "user.account_id",
+            "user.email",
+            "network.policy.reason",
+            "server.address",
+            "server.port",
+            "http.request.method",
+            "client.address",
+            "execution.id",
+        ] {
+            assert!(!event.fields.contains_key(field));
+        }
+        for secret in [
+            "canary-network-conversation-id",
+            "canary-network-account-id",
+            "canary-network@example.com",
+            "canary arbitrary policy reason",
+            "canary-private-host.internal",
+            "10.0.0.12:43123",
+            "canary-network-execution-id",
+        ] {
+            assert!(
+                event.fields.values().all(|value| !value.contains(secret)),
+                "network-policy OTEL event leaked {secret:?}: {event:?}"
+            );
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]

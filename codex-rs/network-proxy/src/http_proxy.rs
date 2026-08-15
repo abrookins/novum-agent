@@ -308,10 +308,8 @@ async fn http_connect_accept(
                 source: NetworkDecisionSource::ModeGuard,
                 reason: REASON_MITM_REQUIRED,
                 protocol: NetworkProtocol::HttpsConnect,
-                server_address: host.as_str(),
                 server_port: authority.port,
                 method: Some("CONNECT"),
-                client_addr: client.as_deref(),
             },
         );
         let details = PolicyDecisionDetails {
@@ -570,10 +568,8 @@ async fn http_plain_proxy(
                     source: NetworkDecisionSource::ModeGuard,
                     reason: REASON_METHOD_NOT_ALLOWED,
                     protocol: NetworkProtocol::Http,
-                    server_address: "unix-socket",
                     server_port: 0,
                     method: Some(req.method().as_str()),
-                    client_addr: client.as_deref(),
                 },
             );
             let client = client.as_deref().unwrap_or_default();
@@ -595,10 +591,8 @@ async fn http_plain_proxy(
                     source: NetworkDecisionSource::ProxyState,
                     reason: REASON_UNIX_SOCKET_UNSUPPORTED,
                     protocol: NetworkProtocol::Http,
-                    server_address: "unix-socket",
                     server_port: 0,
                     method: Some(req.method().as_str()),
-                    client_addr: client.as_deref(),
                 },
             );
             warn!("unix socket proxy unsupported on this platform (path={socket_path})");
@@ -616,10 +610,8 @@ async fn http_plain_proxy(
                         source: NetworkDecisionSource::ProxyState,
                         reason: "allow",
                         protocol: NetworkProtocol::Http,
-                        server_address: "unix-socket",
                         server_port: 0,
                         method: Some(req.method().as_str()),
-                        client_addr: client.as_deref(),
                     },
                 );
                 let client = client.as_deref().unwrap_or_default();
@@ -642,10 +634,8 @@ async fn http_plain_proxy(
                         source: NetworkDecisionSource::ProxyState,
                         reason: REASON_NOT_ALLOWED,
                         protocol: NetworkProtocol::Http,
-                        server_address: "unix-socket",
                         server_port: 0,
                         method: Some(req.method().as_str()),
-                        client_addr: client.as_deref(),
                     },
                 );
                 let client = client.as_deref().unwrap_or_default();
@@ -765,10 +755,8 @@ async fn http_plain_proxy(
                 source: NetworkDecisionSource::ModeGuard,
                 reason: REASON_METHOD_NOT_ALLOWED,
                 protocol: NetworkProtocol::Http,
-                server_address: host.as_str(),
                 server_port: port,
                 method: Some(req.method().as_str()),
-                client_addr: client.as_deref(),
             },
         );
         let details = PolicyDecisionDetails {
@@ -1000,18 +988,17 @@ async fn proxy_disabled_response(
     protocol: NetworkProtocol,
     audit_endpoint_override: Option<(&str, u16)>,
 ) -> Response {
-    let (audit_server_address, audit_server_port) =
-        audit_endpoint_override.unwrap_or((host.as_str(), port));
+    let audit_server_port = audit_endpoint_override
+        .map(|(_, audit_server_port)| audit_server_port)
+        .unwrap_or(port);
     emit_http_block_decision_audit_event(
         app_state,
         BlockDecisionAuditEventArgs {
             source: NetworkDecisionSource::ProxyState,
             reason: REASON_PROXY_DISABLED,
             protocol,
-            server_address: audit_server_address,
             server_port: audit_server_port,
             method: method.as_deref(),
-            client_addr: client.as_deref(),
         },
     );
 

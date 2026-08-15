@@ -4,7 +4,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use codex_api::AgentIdentityTelemetry;
 use codex_api::ModelsClient;
 use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
@@ -28,11 +27,10 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CoreResult;
 use codex_protocol::openai_models::ModelInfo;
 use codex_response_debug_context::extract_response_debug_context;
-use codex_response_debug_context::telemetry_transport_error_message;
+use codex_response_debug_context::telemetry_transport_error_type;
 use http::HeaderMap;
 use tokio::time::timeout;
 
-use crate::auth::agent_identity_telemetry;
 use crate::auth::resolve_provider_auth;
 
 const MODELS_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -86,16 +84,10 @@ impl OpenAiModelsEndpoint {
         let request_url =
             ModelsClient::<ReqwestTransport>::request_url(&api_provider, client_version);
         let auth_telemetry = auth_header_telemetry(api_auth.as_ref());
-        let agent_identity_telemetry = if let Some(CodexAuth::AgentIdentity(auth)) = auth.as_ref() {
-            Some(agent_identity_telemetry(auth))
-        } else {
-            None
-        };
         let request_telemetry: Arc<dyn RequestTelemetry> = Arc::new(ModelsRequestTelemetry {
             auth_mode: auth_mode.map(|mode| TelemetryAuthMode::from(mode).to_string()),
             auth_header_attached: auth_telemetry.attached,
             auth_header_name: auth_telemetry.name,
-            agent_identity_telemetry,
             auth_env: self.auth_env(),
         });
         timeout(MODELS_REFRESH_TIMEOUT, async {
@@ -181,7 +173,6 @@ struct ModelsRequestTelemetry {
     auth_mode: Option<String>,
     auth_header_attached: bool,
     auth_header_name: Option<&'static str>,
-    agent_identity_telemetry: Option<AgentIdentityTelemetry>,
     auth_env: AuthEnvTelemetry,
 }
 
@@ -194,10 +185,16 @@ impl RequestTelemetry for ModelsRequestTelemetry {
         duration: Duration,
     ) {
         let success = status.is_some_and(|code| code.is_success()) && error.is_none();
-        let error_message = error.map(telemetry_transport_error_message);
+        let error_type = error.map(telemetry_transport_error_type);
         let response_debug = error
             .map(extract_response_debug_context)
             .unwrap_or_default();
+        let auth_error_code = match response_debug.auth_error_code.as_deref() {
+            Some("token_expired") => Some("token_expired"),
+            Some("refresh_token_expired") => Some("refresh_token_expired"),
+            Some(_) => Some("other"),
+            None => None,
+        };
         let status = status.map(|status| status.as_u16());
         tracing::event!(
             target: "codex_otel.log_only",
@@ -206,7 +203,7 @@ impl RequestTelemetry for ModelsRequestTelemetry {
             duration_ms = %duration.as_millis(),
             http.response.status_code = status,
             success = success,
-            error.message = error_message.as_deref(),
+            error.type = error_type,
             attempt = attempt,
             endpoint = MODELS_ENDPOINT,
             auth.header_attached = self.auth_header_attached,
@@ -214,16 +211,10 @@ impl RequestTelemetry for ModelsRequestTelemetry {
             auth.env_openai_api_key_present = self.auth_env.openai_api_key_env_present,
             auth.env_codex_api_key_present = self.auth_env.codex_api_key_env_present,
             auth.env_codex_api_key_enabled = self.auth_env.codex_api_key_env_enabled,
-            auth.env_provider_key_name = self.auth_env.provider_env_key_name.as_deref(),
             auth.env_provider_key_present = self.auth_env.provider_env_key_present,
             auth.env_refresh_token_url_override_present = self.auth_env.refresh_token_url_override_present,
-            auth.request_id = response_debug.request_id.as_deref(),
-            auth.cf_ray = response_debug.cf_ray.as_deref(),
-            auth.error = response_debug.auth_error.as_deref(),
-            auth.error_code = response_debug.auth_error_code.as_deref(),
+            auth.error_code = auth_error_code,
             auth.mode = self.auth_mode.as_deref(),
-            auth.agent_id = self.agent_identity_telemetry.as_ref().map(|metadata| metadata.agent_id.as_str()),
-            auth.task_id = self.agent_identity_telemetry.as_ref().map(|metadata| metadata.task_id.as_str()),
         );
         tracing::event!(
             target: "codex_otel.trace_safe",
@@ -232,7 +223,7 @@ impl RequestTelemetry for ModelsRequestTelemetry {
             duration_ms = %duration.as_millis(),
             http.response.status_code = status,
             success = success,
-            error.message = error_message.as_deref(),
+            error.type = error_type,
             attempt = attempt,
             endpoint = MODELS_ENDPOINT,
             auth.header_attached = self.auth_header_attached,
@@ -240,16 +231,10 @@ impl RequestTelemetry for ModelsRequestTelemetry {
             auth.env_openai_api_key_present = self.auth_env.openai_api_key_env_present,
             auth.env_codex_api_key_present = self.auth_env.codex_api_key_env_present,
             auth.env_codex_api_key_enabled = self.auth_env.codex_api_key_env_enabled,
-            auth.env_provider_key_name = self.auth_env.provider_env_key_name.as_deref(),
             auth.env_provider_key_present = self.auth_env.provider_env_key_present,
             auth.env_refresh_token_url_override_present = self.auth_env.refresh_token_url_override_present,
-            auth.request_id = response_debug.request_id.as_deref(),
-            auth.cf_ray = response_debug.cf_ray.as_deref(),
-            auth.error = response_debug.auth_error.as_deref(),
-            auth.error_code = response_debug.auth_error_code.as_deref(),
+            auth.error_code = auth_error_code,
             auth.mode = self.auth_mode.as_deref(),
-            auth.agent_id = self.agent_identity_telemetry.as_ref().map(|metadata| metadata.agent_id.as_str()),
-            auth.task_id = self.agent_identity_telemetry.as_ref().map(|metadata| metadata.task_id.as_str()),
         );
         emit_feedback_request_tags_with_auth_env(
             &FeedbackRequestTags {
@@ -275,6 +260,7 @@ impl RequestTelemetry for ModelsRequestTelemetry {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
     use std::num::NonZeroU64;
     use std::sync::Mutex;
 
@@ -283,7 +269,12 @@ mod tests {
     use codex_login::default_client::create_client;
     use codex_protocol::config_types::ModelProviderAuthInfo;
     use codex_protocol::openai_models::ModelsResponse;
+    use http::HeaderValue;
+    use http::StatusCode;
     use pretty_assertions::assert_eq;
+    use tracing_subscriber::Layer;
+    use tracing_subscriber::filter::Targets;
+    use tracing_subscriber::layer::SubscriberExt;
     use wiremock::Mock;
     use wiremock::MockServer;
     use wiremock::ResponseTemplate;
@@ -294,6 +285,22 @@ mod tests {
     #[derive(Debug)]
     struct RecordingTransportBuilder {
         observed_request: Arc<Mutex<Option<(OutboundProxyPolicy, String)>>>,
+    }
+
+    struct CapturedLogWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for CapturedLogWriter {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .expect("captured log lock should not be poisoned")
+                .extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
     }
 
     impl ModelsTransportBuilder for RecordingTransportBuilder {
@@ -348,6 +355,85 @@ mod tests {
         );
 
         assert!(!endpoint.has_command_auth());
+    }
+
+    #[test]
+    fn models_request_telemetry_omits_response_and_identity_details() {
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let writer_output = Arc::clone(&output);
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .without_time()
+                .with_writer(move || CapturedLogWriter(Arc::clone(&writer_output)))
+                .with_filter(
+                    Targets::new().with_target("codex_otel.log_only", tracing::Level::INFO),
+                ),
+        );
+        let _guard = tracing::subscriber::set_default(subscriber);
+        tracing::callsite::rebuild_interest_cache();
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-oai-request-id",
+            HeaderValue::from_static("canary-models-request-id"),
+        );
+        headers.insert("cf-ray", HeaderValue::from_static("canary-models-ray-id"));
+        headers.insert(
+            "x-openai-authorization-error",
+            HeaderValue::from_static("canary raw models authorization failure"),
+        );
+        let error = TransportError::Http {
+            status: StatusCode::UNAUTHORIZED,
+            url: Some("https://canary-models-host.invalid/models".to_string()),
+            headers: Some(headers),
+            body: Some("canary raw models response body".to_string()),
+        };
+        let telemetry = ModelsRequestTelemetry {
+            auth_mode: Some("chatgpt".to_string()),
+            auth_header_attached: true,
+            auth_header_name: Some("authorization"),
+            auth_env: AuthEnvTelemetry::default(),
+        };
+
+        telemetry.on_request(
+            /*attempt*/ 1,
+            Some(StatusCode::UNAUTHORIZED),
+            Some(&error),
+            Duration::from_millis(12),
+        );
+        let network_error = TransportError::Network("canary models network error".to_string());
+        telemetry.on_request(
+            /*attempt*/ 2,
+            /*status*/ None,
+            Some(&network_error),
+            Duration::from_millis(13),
+        );
+
+        let logs = String::from_utf8(
+            output
+                .lock()
+                .expect("captured log lock should not be poisoned")
+                .clone(),
+        )
+        .expect("captured logs should be UTF-8");
+        assert!(logs.contains("event.name=\"codex.api_request\""));
+        assert!(logs.contains("http.response.status_code=401"));
+        assert!(logs.contains("success=false"));
+        assert!(logs.contains("error.type=\"http\""));
+        assert!(logs.contains("error.type=\"network\""));
+        for secret in [
+            "canary-models-request-id",
+            "canary-models-ray-id",
+            "canary raw models authorization failure",
+            "canary-models-host.invalid",
+            "canary raw models response body",
+            "canary-models-agent-id",
+            "canary-models-task-id",
+            "canary models network error",
+        ] {
+            assert!(!logs.contains(secret), "OTEL log leaked {secret:?}: {logs}");
+        }
     }
 
     #[tokio::test]

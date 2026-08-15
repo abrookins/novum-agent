@@ -352,21 +352,12 @@ async fn mcp_tool_call_span_records_expected_fields() {
         .finish();
     let _guard = tracing::subscriber::set_default(subscriber);
 
-    let (session, turn_context) = make_session_and_context().await;
-
     async {}
-        .instrument(mcp_tool_call_span(
-            &session,
-            &turn_context,
-            McpToolCallSpanFields {
-                server_name: "rmcp",
-                tool_name: "echo",
-                call_id: "call-123",
-                server_origin: Some("https://example.com:8443/mcp"),
-                connector_id: Some("calendar"),
-                connector_name: Some("Calendar"),
-            },
-        ))
+        .instrument(mcp_tool_call_span(McpToolCallSpanFields {
+            server_name: "canary-private-server",
+            server_origin: Some("https://canary-private-host:8443/mcp"),
+            connector_present: true,
+        }))
         .await;
 
     let logs = String::from_utf8(buffer.lock().expect("buffer lock").clone()).expect("utf8 logs");
@@ -374,24 +365,18 @@ async fn mcp_tool_call_span_records_expected_fields() {
         logs.contains("mcp.tools.call{otel.kind=\"client\"")
             && logs.contains("rpc.system=\"jsonrpc\"")
             && logs.contains("rpc.method=\"tools/call\"")
-            && logs.contains("mcp.server.name=\"rmcp\"")
-            && logs.contains("mcp.server.origin=\"https://example.com:8443/mcp\"")
+            && logs.contains("mcp.server.category=\"custom\"")
             && logs.contains("mcp.transport=\"streamable_http\"")
-            && logs.contains("mcp.connector.id=\"calendar\"")
-            && logs.contains("mcp.connector.name=\"Calendar\"")
-            && logs.contains("tool.name=\"echo\"")
-            && logs.contains("tool.call_id=\"call-123\"")
-            && logs.contains("server.address=\"example.com\"")
-            && logs.contains("server.port=8443")
-            && logs.contains("conversation.id=")
-            && logs.contains("session.id=")
-            && logs.contains("turn.id="),
+            && logs.contains("mcp.connector.present=true")
+            && logs.contains("tool.category=\"connector\"")
+            && !logs.contains("canary-private-server")
+            && !logs.contains("canary-private-host"),
         "missing MCP tool span fields\nlogs:\n{logs}"
     );
 }
 
 #[tokio::test]
-async fn mcp_tool_call_span_records_error_type_and_error_code() {
+async fn mcp_tool_call_span_records_error_type_and_error_category() {
     let buffer: &'static std::sync::Mutex<Vec<u8>> =
         Box::leak(Box::new(std::sync::Mutex::new(Vec::new())));
     let subscriber = tracing_subscriber::fmt()
@@ -403,25 +388,17 @@ async fn mcp_tool_call_span_records_error_type_and_error_code() {
         .finish();
     let _guard = tracing::subscriber::set_default(subscriber);
 
-    let (session, turn_context) = make_session_and_context().await;
     let result = Ok(CallToolResult {
         content: Vec::new(),
         structured_content: Some(serde_json::json!({"error_code": "RATE_LIMITED"})),
         is_error: Some(true),
         meta: None,
     });
-    let span = mcp_tool_call_span(
-        &session,
-        &turn_context,
-        McpToolCallSpanFields {
-            server_name: CODEX_APPS_MCP_SERVER_NAME,
-            tool_name: "calendar_search",
-            call_id: "call-123",
-            server_origin: Some("https://chatgpt.com/api/codex/ps/mcp"),
-            connector_id: Some("calendar"),
-            connector_name: Some("Calendar"),
-        },
-    );
+    let span = mcp_tool_call_span(McpToolCallSpanFields {
+        server_name: CODEX_APPS_MCP_SERVER_NAME,
+        server_origin: Some("https://chatgpt.com/api/codex/ps/mcp"),
+        connector_present: true,
+    });
 
     async {
         record_mcp_result_span_telemetry(&Span::current(), &result);
@@ -432,7 +409,7 @@ async fn mcp_tool_call_span_records_error_type_and_error_code() {
     let logs = String::from_utf8(buffer.lock().expect("buffer lock").clone()).expect("utf8 logs");
     assert!(
         logs.contains("error.type=\"tool_result\"")
-            && logs.contains("codex.mcp.error.code=\"RATE_LIMITED\""),
+            && logs.contains("codex.mcp.error.category=\"rate_limit\""),
         "missing MCP tool error span fields\nlogs:\n{logs}"
     );
 }
@@ -449,7 +426,6 @@ async fn mcp_result_telemetry_span_logs(meta: Option<serde_json::Value>) -> Stri
         .finish();
     let _guard = tracing::subscriber::set_default(subscriber);
 
-    let (session, turn_context) = make_session_and_context().await;
     let result = Ok(CallToolResult {
         content: Vec::new(),
         structured_content: None,
@@ -458,18 +434,11 @@ async fn mcp_result_telemetry_span_logs(meta: Option<serde_json::Value>) -> Stri
     });
 
     {
-        let span = mcp_tool_call_span(
-            &session,
-            &turn_context,
-            McpToolCallSpanFields {
-                server_name: "rmcp",
-                tool_name: "echo",
-                call_id: "call-123",
-                server_origin: None,
-                connector_id: None,
-                connector_name: None,
-            },
-        );
+        let span = mcp_tool_call_span(McpToolCallSpanFields {
+            server_name: "rmcp",
+            server_origin: None,
+            connector_present: false,
+        });
 
         async {
             record_mcp_result_span_telemetry(&Span::current(), &result);
@@ -495,9 +464,9 @@ async fn mcp_result_telemetry_records_allowlisted_span_fields() {
     .await;
 
     assert!(
-        logs.contains("codex.mcp.target.id=\"com.apple.reminders\"")
-            && logs.contains("codex.mcp.server_user_flow.triggered=false"),
-        "missing MCP result telemetry span fields\nlogs:\n{logs}"
+        logs.contains("codex.mcp.server_user_flow.triggered=false")
+            && !logs.contains("com.apple.reminders"),
+        "missing or unsafe MCP result telemetry span fields\nlogs:\n{logs}"
     );
     assert!(
         !logs.contains("not_promoted_sentinel_key")
@@ -518,8 +487,7 @@ async fn mcp_result_telemetry_ignores_invalid_and_missing_values() {
     })))
     .await;
     assert!(
-        !invalid_logs.contains("codex.mcp.target.id=")
-            && !invalid_logs.contains("codex.mcp.server_user_flow.triggered="),
+        !invalid_logs.contains("codex.mcp.server_user_flow.triggered="),
         "invalid MCP result telemetry values should be ignored\nlogs:\n{invalid_logs}"
     );
 
@@ -528,48 +496,14 @@ async fn mcp_result_telemetry_ignores_invalid_and_missing_values() {
     })))
     .await;
     assert!(
-        !missing_logs.contains("codex.mcp.target.id=")
-            && !missing_logs.contains("codex.mcp.server_user_flow.triggered="),
+        !missing_logs.contains("codex.mcp.server_user_flow.triggered="),
         "missing MCP result telemetry span object should be ignored\nlogs:\n{missing_logs}"
     );
 
     let no_meta_logs = mcp_result_telemetry_span_logs(/*meta*/ None).await;
     assert!(
-        !no_meta_logs.contains("codex.mcp.target.id=")
-            && !no_meta_logs.contains("codex.mcp.server_user_flow.triggered="),
+        !no_meta_logs.contains("codex.mcp.server_user_flow.triggered="),
         "missing MCP result metadata should be ignored\nlogs:\n{no_meta_logs}"
-    );
-}
-
-#[tokio::test]
-async fn mcp_result_telemetry_truncates_long_target_id() {
-    let truncated = "x".repeat(MCP_RESULT_TELEMETRY_TARGET_ID_MAX_CHARS);
-    let target_id = format!("{truncated}tail");
-    let logs = mcp_result_telemetry_span_logs(Some(serde_json::json!({
-        "codex/telemetry": {
-            "span": {
-                "target_id": target_id,
-            },
-        },
-    })))
-    .await;
-
-    assert!(
-        logs.contains(&format!("codex.mcp.target.id=\"{truncated}\"")) && !logs.contains("tail"),
-        "long MCP result telemetry target_id should be truncated\nlogs:\n{logs}"
-    );
-}
-
-#[test]
-fn truncates_strings_on_char_boundaries() {
-    let prefix = "á".repeat(MCP_RESULT_TELEMETRY_TARGET_ID_MAX_CHARS);
-    let value = format!("{prefix}tail");
-    let truncated = truncate_str_to_char_boundary(&value, MCP_RESULT_TELEMETRY_TARGET_ID_MAX_CHARS);
-
-    assert_eq!(truncated, prefix);
-    assert_eq!(
-        truncate_str_to_char_boundary("short", MCP_RESULT_TELEMETRY_TARGET_ID_MAX_CHARS),
-        "short"
     );
 }
 

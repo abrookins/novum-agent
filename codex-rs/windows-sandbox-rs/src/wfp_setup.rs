@@ -1,5 +1,4 @@
 use crate::install_wfp_filters_for_account;
-use crate::setup_error::sanitize_setup_metric_tag_value;
 use anyhow::Result;
 use codex_otel::OtelExporter;
 use codex_otel::OtelProvider;
@@ -20,9 +19,7 @@ enum WfpSetupMetricOutcome {
 
 struct WfpSetupMetric {
     outcome: WfpSetupMetricOutcome,
-    target_account: String,
     installed_filter_count: usize,
-    error: Option<String>,
 }
 
 fn panic_payload_to_string(panic_payload: Box<dyn std::any::Any + Send>) -> String {
@@ -70,26 +67,21 @@ fn emit_wfp_setup_metric(
         return Ok(());
     };
     if let Some(metrics) = provider.metrics() {
-        let target_account = sanitize_setup_metric_tag_value(&metric.target_account);
         match metric.outcome {
             WfpSetupMetricOutcome::Success => {
-                let installed_filter_count = metric.installed_filter_count.to_string();
+                let installed_filter_count = match metric.installed_filter_count {
+                    0 => "none",
+                    1 => "one",
+                    _ => "multiple",
+                };
                 metrics.counter(
                     WFP_SETUP_SUCCESS_METRIC,
                     /*inc*/ 1,
-                    &[
-                        ("target_account", target_account.as_str()),
-                        ("installed_filter_count", installed_filter_count.as_str()),
-                    ],
+                    &[("installed_filter_count", installed_filter_count)],
                 )?;
             }
             WfpSetupMetricOutcome::Failure => {
-                let mut tags = vec![("target_account", target_account.as_str())];
-                let error_tag = metric.error.as_deref().map(sanitize_setup_metric_tag_value);
-                if let Some(error) = error_tag.as_deref() {
-                    tags.push(("message", error));
-                }
-                metrics.counter(WFP_SETUP_FAILURE_METRIC, /*inc*/ 1, &tags)?;
+                metrics.counter(WFP_SETUP_FAILURE_METRIC, /*inc*/ 1, &[])?;
             }
         }
     }
@@ -140,9 +132,7 @@ pub fn install_wfp_filters<F>(
             ));
             WfpSetupMetric {
                 outcome: WfpSetupMetricOutcome::Success,
-                target_account: offline_username.to_string(),
                 installed_filter_count,
-                error: None,
             }
         }
         Ok(Err(err)) => {
@@ -152,9 +142,7 @@ pub fn install_wfp_filters<F>(
             ));
             WfpSetupMetric {
                 outcome: WfpSetupMetricOutcome::Failure,
-                target_account: offline_username.to_string(),
                 installed_filter_count: 0,
-                error: Some(error),
             }
         }
         Err(panic_payload) => {
@@ -164,9 +152,7 @@ pub fn install_wfp_filters<F>(
             ));
             WfpSetupMetric {
                 outcome: WfpSetupMetricOutcome::Failure,
-                target_account: offline_username.to_string(),
                 installed_filter_count: 0,
-                error: Some(format!("panic: {error}")),
             }
         }
     };

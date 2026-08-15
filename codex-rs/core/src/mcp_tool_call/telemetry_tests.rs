@@ -14,7 +14,7 @@ fn metric_call_tool_result(
 }
 
 #[test]
-fn mcp_call_metric_tags_include_server_name() {
+fn mcp_call_metric_tags_replace_private_names_with_categories() {
     assert_eq!(
         mcp_call_metric_tags(
             "error",
@@ -25,10 +25,9 @@ fn mcp_call_metric_tags_include_server_name() {
         ),
         vec![
             ("status", "error".to_string()),
-            ("server", "docs_server".to_string()),
-            ("tool", "search_docs".to_string()),
-            ("connector_id", "connector/docs".to_string()),
-            ("connector_name", "Docs_connector".to_string()),
+            ("server", "custom".to_string()),
+            ("tool", "connector".to_string()),
+            ("connector_present", "true".to_string()),
         ],
     );
 }
@@ -42,7 +41,7 @@ fn mcp_call_metric_outcome_distinguishes_request_and_tool_errors() {
         McpCallMetricOutcome {
             status: "ok",
             error_type: None,
-            error_code: None,
+            error_category: None,
         }
     );
     assert_eq!(
@@ -53,7 +52,7 @@ fn mcp_call_metric_outcome_distinguishes_request_and_tool_errors() {
         McpCallMetricOutcome {
             status: "error",
             error_type: Some(MCP_CALL_ERROR_TYPE_TOOL_RESULT),
-            error_code: Some("RATE_LIMITED".to_string()),
+            error_category: Some("rate_limit"),
         }
     );
     assert_eq!(
@@ -61,13 +60,13 @@ fn mcp_call_metric_outcome_distinguishes_request_and_tool_errors() {
         McpCallMetricOutcome {
             status: "error",
             error_type: Some(MCP_CALL_ERROR_TYPE_MCP_REQUEST),
-            error_code: Some(MCP_CALL_ERROR_CODE_UNKNOWN.to_string()),
+            error_category: Some(MCP_CALL_ERROR_CATEGORY_UNKNOWN),
         }
     );
 }
 
 #[test]
-fn mcp_call_metric_outcome_reports_server_tool_error_codes() {
+fn mcp_call_metric_outcome_buckets_server_tool_error_codes() {
     let result = Ok(metric_call_tool_result(
         /*is_error*/ true,
         Some(serde_json::json!({"error_code": "arbitrary-user-value"})),
@@ -78,7 +77,7 @@ fn mcp_call_metric_outcome_reports_server_tool_error_codes() {
         McpCallMetricOutcome {
             status: "error",
             error_type: Some(MCP_CALL_ERROR_TYPE_TOOL_RESULT),
-            error_code: Some("arbitrary-user-value".to_string()),
+            error_category: Some("other"),
         }
     );
 }
@@ -104,13 +103,13 @@ fn mcp_call_metric_outcome_reads_auth_error_code_from_meta() {
         McpCallMetricOutcome {
             status: "error",
             error_type: Some(MCP_CALL_ERROR_TYPE_TOOL_RESULT),
-            error_code: Some("UNAUTHORIZED".to_string()),
+            error_category: Some("authentication"),
         }
     );
 }
 
 #[test]
-fn mcp_call_metric_outcome_bounds_and_sanitizes_error_code() {
+fn mcp_call_metric_outcome_does_not_preserve_arbitrary_error_code() {
     let raw_error_code = format!("BAD CODE {}", "x".repeat(300));
     let result = Ok(metric_call_tool_result(
         /*is_error*/ true,
@@ -122,7 +121,7 @@ fn mcp_call_metric_outcome_bounds_and_sanitizes_error_code() {
         McpCallMetricOutcome {
             status: "error",
             error_type: Some(MCP_CALL_ERROR_TYPE_TOOL_RESULT),
-            error_code: Some(format!("BAD_CODE_{}", "x".repeat(247))),
+            error_category: Some("other"),
         }
     );
 }

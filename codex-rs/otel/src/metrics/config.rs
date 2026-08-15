@@ -27,7 +27,6 @@ pub enum MetricsExporter {
 pub struct MetricsConfig {
     pub(crate) environment: String,
     pub(crate) service_name: String,
-    pub(crate) service_version: String,
     pub(crate) exporter: MetricsExporter,
     pub(crate) export_interval: Option<Duration>,
     pub(crate) runtime_reader: bool,
@@ -39,7 +38,7 @@ impl MetricsConfig {
     pub fn otlp(
         environment: impl Into<String>,
         service_name: impl Into<String>,
-        service_version: impl Into<String>,
+        _service_version: impl Into<String>,
         exporter: OtelExporter,
     ) -> Self {
         let runtime_only_metrics = if matches!(exporter, OtelExporter::Statsig) {
@@ -50,7 +49,6 @@ impl MetricsConfig {
         Self {
             environment: environment.into(),
             service_name: service_name.into(),
-            service_version: service_version.into(),
             exporter: MetricsExporter::Otlp(exporter),
             export_interval: None,
             runtime_reader: false,
@@ -63,13 +61,12 @@ impl MetricsConfig {
     pub fn in_memory(
         environment: impl Into<String>,
         service_name: impl Into<String>,
-        service_version: impl Into<String>,
+        _service_version: impl Into<String>,
         exporter: InMemoryMetricExporter,
     ) -> Self {
         Self {
             environment: environment.into(),
             service_name: service_name.into(),
-            service_version: service_version.into(),
             exporter: MetricsExporter::InMemory(exporter),
             export_interval: None,
             runtime_reader: false,

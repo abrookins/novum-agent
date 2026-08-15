@@ -106,7 +106,7 @@ pub(crate) async fn handle_message_string_tool(
         MessageDeliveryMode::QueueOnly => AgentCommunicationKind::Message,
         MessageDeliveryMode::TriggerTurn => AgentCommunicationKind::Followup,
     };
-    let context = AgentCommunicationContext::new(kind, session.thread_id);
+    let context = AgentCommunicationContext::new(kind);
     let parent_turn_id =
         matches!(mode, MessageDeliveryMode::TriggerTurn).then(|| turn.sub_id.clone());
     let result = session

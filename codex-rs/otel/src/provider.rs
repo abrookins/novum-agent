@@ -6,7 +6,7 @@ use crate::metrics::MetricsClient;
 use crate::metrics::MetricsConfig;
 use crate::targets::is_log_export_target;
 use crate::targets::is_trace_safe_target;
-use gethostname::gethostname;
+use crate::trace_sanitizer::PrivacyPreservingSpanExporter;
 use opentelemetry::Context;
 use opentelemetry::KeyValue;
 use opentelemetry::global;
@@ -49,14 +49,6 @@ use tracing_subscriber::Layer;
 use tracing_subscriber::registry::LookupSpan;
 
 const ENV_ATTRIBUTE: &str = "env";
-const HOST_NAME_ATTRIBUTE: &str = "host.name";
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ResourceKind {
-    Logs,
-    Traces,
-}
-
 pub struct OtelProvider {
     pub logger: Option<SdkLoggerProvider>,
     pub tracer_provider: Option<SdkTracerProvider>,
@@ -171,8 +163,8 @@ impl OtelProvider {
             Some(MetricsClient::new(config)?)
         };
 
-        let log_resource = make_resource(settings, ResourceKind::Logs);
-        let trace_resource = make_resource(settings, ResourceKind::Traces);
+        let log_resource = make_resource(settings);
+        let trace_resource = make_resource(settings);
         let logger = log_enabled
             .then(|| build_logger(&log_resource, &settings.exporter))
             .transpose()?;
@@ -260,45 +252,26 @@ impl Drop for OtelProvider {
     }
 }
 
-fn make_resource(settings: &OtelSettings, kind: ResourceKind) -> Resource {
-    Resource::builder()
-        .with_service_name(settings.service_name.clone())
-        .with_attributes(resource_attributes(
-            settings,
-            detected_host_name().as_deref(),
-            kind,
+fn make_resource(settings: &OtelSettings) -> Resource {
+    Resource::builder_empty()
+        .with_service_name(crate::metrics::bounded_originator_tag_value(
+            &settings.service_name,
         ))
+        .with_attributes(resource_attributes(settings))
         .build()
 }
 
-fn resource_attributes(
-    settings: &OtelSettings,
-    host_name: Option<&str>,
-    kind: ResourceKind,
-) -> Vec<KeyValue> {
-    let mut attributes = vec![
+fn resource_attributes(settings: &OtelSettings) -> Vec<KeyValue> {
+    vec![
         KeyValue::new(
             semconv::attribute::SERVICE_VERSION,
-            settings.service_version.clone(),
+            env!("CARGO_PKG_VERSION"),
         ),
-        KeyValue::new(ENV_ATTRIBUTE, settings.environment.clone()),
-    ];
-    if kind == ResourceKind::Logs
-        && let Some(host_name) = host_name.and_then(normalize_host_name)
-    {
-        attributes.push(KeyValue::new(HOST_NAME_ATTRIBUTE, host_name));
-    }
-    attributes
-}
-
-fn detected_host_name() -> Option<String> {
-    let host_name = gethostname();
-    normalize_host_name(host_name.to_string_lossy().as_ref())
-}
-
-fn normalize_host_name(host_name: &str) -> Option<String> {
-    let host_name = host_name.trim();
-    (!host_name.is_empty()).then(|| host_name.to_owned())
+        KeyValue::new(
+            ENV_ATTRIBUTE,
+            crate::metrics::bounded_environment_category(&settings.environment),
+        ),
+    ]
 }
 
 fn tracer_provider_builder(
@@ -437,12 +410,14 @@ fn build_tracer_provider(
                 None => base_tls_config,
             };
 
-            SpanExporter::builder()
-                .with_tonic()
-                .with_endpoint(endpoint)
-                .with_metadata(MetadataMap::from_headers(header_map))
-                .with_tls_config(tls_config)
-                .build()?
+            PrivacyPreservingSpanExporter::new(
+                SpanExporter::builder()
+                    .with_tonic()
+                    .with_endpoint(endpoint)
+                    .with_metadata(MetadataMap::from_headers(header_map))
+                    .with_tls_config(tls_config)
+                    .build()?,
+            )
         }
         OtelExporter::OtlpHttp {
             endpoint,
@@ -470,9 +445,11 @@ fn build_tracer_provider(
                 )?;
                 exporter_builder = exporter_builder.with_http_client(client);
 
-                let processor =
-                    TokioBatchSpanProcessor::builder(exporter_builder.build()?, runtime::Tokio)
-                        .build();
+                let processor = TokioBatchSpanProcessor::builder(
+                    PrivacyPreservingSpanExporter::new(exporter_builder.build()?),
+                    runtime::Tokio,
+                )
+                .build();
 
                 return Ok(tracer_provider_builder(resource, span_attributes)
                     .with_span_processor(processor)
@@ -496,7 +473,7 @@ fn build_tracer_provider(
                 exporter_builder = exporter_builder.with_http_client(client);
             }
 
-            exporter_builder.build()?
+            PrivacyPreservingSpanExporter::new(exporter_builder.build()?)
         }
     };
 
@@ -524,49 +501,13 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn resource_attributes_include_host_name_when_present() {
-        let attrs = resource_attributes(
-            &test_otel_settings(),
-            Some("opentelemetry-test"),
-            ResourceKind::Logs,
-        );
-
-        let host_name = attrs
-            .iter()
-            .find(|kv| kv.key.as_str() == HOST_NAME_ATTRIBUTE)
-            .map(|kv| kv.value.as_str().to_string());
-
-        assert_eq!(host_name, Some("opentelemetry-test".to_string()));
-    }
-
-    #[test]
-    fn resource_attributes_omit_host_name_when_missing_or_empty() {
-        let missing = resource_attributes(
-            &test_otel_settings(),
-            /*host_name*/ None,
-            ResourceKind::Logs,
-        );
-        let empty = resource_attributes(&test_otel_settings(), Some("   "), ResourceKind::Logs);
-        let trace_attrs = resource_attributes(
-            &test_otel_settings(),
-            Some("opentelemetry-test"),
-            ResourceKind::Traces,
-        );
+    fn resource_attributes_omit_host_name() {
+        let attributes = resource_attributes(&test_otel_settings());
 
         assert!(
-            !missing
+            !attributes
                 .iter()
-                .any(|kv| kv.key.as_str() == HOST_NAME_ATTRIBUTE)
-        );
-        assert!(
-            !empty
-                .iter()
-                .any(|kv| kv.key.as_str() == HOST_NAME_ATTRIBUTE)
-        );
-        assert!(
-            !trace_attrs
-                .iter()
-                .any(|kv| kv.key.as_str() == HOST_NAME_ATTRIBUTE)
+                .any(|attribute| attribute.key.as_str() == "host.name")
         );
     }
 
@@ -574,6 +515,9 @@ mod tests {
     fn log_export_target_excludes_trace_safe_events() {
         assert!(is_log_export_target("codex_otel.log_only"));
         assert!(is_log_export_target("codex_otel.network_proxy"));
+        assert!(is_log_export_target("codex_otel.agent_communication"));
+        assert!(!is_log_export_target("codex_otel.arbitrary"));
+        assert!(!is_log_export_target("codex_otel.log_only.debug"));
         assert!(!is_log_export_target("codex_otel.trace_safe"));
         assert!(!is_log_export_target("codex_otel.trace_safe.debug"));
     }

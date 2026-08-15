@@ -183,12 +183,9 @@ pub async fn upload_openai_file(
                 target: "codex_otel.log_only",
                 tracing::Level::WARN,
                 event.name = "codex.openai_file_blob_upload_failed",
-                file_id = %create_payload.file_id,
-                host = %upload_host,
                 file_size_bytes,
                 elapsed_ms,
                 error_kind,
-                azure_client_request_id,
                 "OpenAI file blob upload transport failed"
             );
             OpenAiFileError::BlobUploadRequest {
@@ -200,7 +197,6 @@ pub async fn upload_openai_file(
             }
         })?;
     let upload_status = upload_response.status();
-    let cloudflare_ray_id = upload_response_header(&upload_response, "cf-ray");
     let azure_request_id = upload_response_header(&upload_response, "x-ms-request-id");
     let azure_error_code = upload_response_header(&upload_response, "x-ms-error-code");
     if !upload_status.is_success() {
@@ -208,15 +204,9 @@ pub async fn upload_openai_file(
             target: "codex_otel.log_only",
             tracing::Level::WARN,
             event.name = "codex.openai_file_blob_upload_failed",
-            file_id = %create_payload.file_id,
-            host = %upload_host,
             file_size_bytes,
             elapsed_ms = upload_started_at.elapsed().as_millis(),
             status = %upload_status,
-            cloudflare_ray_id,
-            azure_client_request_id,
-            azure_request_id,
-            azure_error_code,
             "OpenAI file blob upload failed"
         );
         return Err(OpenAiFileError::BlobUploadStatus {
@@ -326,9 +316,14 @@ mod tests {
     use codex_http_client::OutboundProxyPolicy;
     use http::header::HeaderValue;
     use pretty_assertions::assert_eq;
+    use std::io::Write;
     use std::sync::Arc;
+    use std::sync::Mutex;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
+    use tracing_subscriber::Layer;
+    use tracing_subscriber::filter::Targets;
+    use tracing_subscriber::layer::SubscriberExt;
     use wiremock::Mock;
     use wiremock::MockServer;
     use wiremock::Request;
@@ -341,6 +336,19 @@ mod tests {
 
     #[derive(Clone, Copy)]
     struct ChatGptTestAuth;
+
+    struct CapturedLogWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for CapturedLogWriter {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("captured log lock").extend(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
 
     fn default_http_client_pool() -> RouteAwareClientPool {
         RouteAwareClientPool::new_without_request_logging(
@@ -529,11 +537,24 @@ mod tests {
 
     #[tokio::test]
     async fn upload_openai_file_reports_blob_response_diagnostics_without_sas() {
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let writer_output = Arc::clone(&output);
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .without_time()
+                .with_writer(move || CapturedLogWriter(Arc::clone(&writer_output)))
+                .with_filter(
+                    Targets::new().with_target("codex_otel.log_only", tracing::Level::INFO),
+                ),
+        );
+        let _guard = tracing::subscriber::set_default(subscriber);
+        tracing::callsite::rebuild_interest_cache();
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/backend-api/files"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "file_id": "file_123",
+                "file_id": "canary-file-id",
                 "upload_url": format!("{}/upload/file_123?sig=secret", server.uri()),
             })))
             .mount(&server)
@@ -542,8 +563,9 @@ mod tests {
             .and(path("/upload/file_123"))
             .respond_with(
                 ResponseTemplate::new(500)
-                    .insert_header("x-ms-request-id", "azure-request")
-                    .insert_header("x-ms-error-code", "ServerBusy")
+                    .insert_header("cf-ray", "canary-cloudflare-ray")
+                    .insert_header("x-ms-request-id", "canary-azure-request")
+                    .insert_header("x-ms-error-code", "canary-azure-error")
                     .set_body_string("try again"),
             )
             .mount(&server)
@@ -563,10 +585,34 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("failed with status 500"));
         assert!(message.contains("azure_client_request_id="));
-        assert!(message.contains("azure_request_id=azure-request"));
-        assert!(message.contains("azure_error_code=ServerBusy"));
+        assert!(message.contains("azure_request_id=canary-azure-request"));
+        assert!(message.contains("azure_error_code=canary-azure-error"));
         assert!(!message.contains("try again"));
         assert!(!message.contains("sig=secret"));
+
+        let logs = String::from_utf8(output.lock().expect("captured log lock").clone())
+            .expect("captured logs should be UTF-8");
+        assert!(logs.contains("event.name=\"codex.openai_file_blob_upload_failed\""));
+        assert!(logs.contains("file_size_bytes=5"));
+        assert!(logs.contains("status=500"));
+        for field in [
+            "file_id=",
+            "host=",
+            "cloudflare_ray_id=",
+            "azure_client_request_id=",
+            "azure_request_id=",
+            "azure_error_code=",
+        ] {
+            assert!(!logs.contains(field), "OTEL log leaked {field:?}: {logs}");
+        }
+        for secret in [
+            "canary-file-id",
+            "canary-cloudflare-ray",
+            "canary-azure-request",
+            "canary-azure-error",
+        ] {
+            assert!(!logs.contains(secret), "OTEL log leaked {secret:?}: {logs}");
+        }
     }
 
     #[tokio::test]

@@ -1980,6 +1980,7 @@ dependencies = [
  "tokio-tungstenite",
  "tokio-util",
  "tracing",
+ "tracing-subscriber",
  "tungstenite",
  "url",
  "uuid",
@@ -3677,6 +3678,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "wiremock",
 ]
 
@@ -3784,7 +3786,6 @@ dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-string",
  "eventsource-stream",
- "gethostname",
  "http 1.4.0",
  "opentelemetry",
  "opentelemetry-appender-tracing",

@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use crate::session::turn_context::TurnContext;
+use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::MCP_TOOL_CODEX_APPS_META_KEY;
-use codex_otel::sanitize_metric_tag_value;
 use codex_protocol::mcp::CallToolResult;
 use serde_json::Value as JsonValue;
 use tracing::Span;
@@ -15,16 +15,15 @@ const MCP_CALL_ERROR_COUNT_METRIC: &str = "codex.mcp.call.error";
 const MCP_CALL_ERROR_TYPE_MCP_REQUEST: &str = "mcp_request";
 // The MCP server returned a CallToolResult with isError=true.
 const MCP_CALL_ERROR_TYPE_TOOL_RESULT: &str = "tool_result";
-const MCP_CALL_ERROR_CODE_UNKNOWN: &str = "unknown";
-const MCP_CALL_ERROR_CODE_MAX_CHARS: usize = 256;
+const MCP_CALL_ERROR_CATEGORY_UNKNOWN: &str = "unknown";
 const MCP_CALL_ERROR_TYPE_SPAN_ATTR: &str = "error.type";
-const MCP_CALL_ERROR_CODE_SPAN_ATTR: &str = "codex.mcp.error.code";
+const MCP_CALL_ERROR_CATEGORY_SPAN_ATTR: &str = "codex.mcp.error.category";
 
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct McpCallMetricOutcome {
     status: &'static str,
     error_type: Option<&'static str>,
-    error_code: Option<String>,
+    error_category: Option<&'static str>,
 }
 
 impl McpCallMetricOutcome {
@@ -32,7 +31,7 @@ impl McpCallMetricOutcome {
         Self {
             status,
             error_type: None,
-            error_code: None,
+            error_category: None,
         }
     }
 }
@@ -68,13 +67,13 @@ pub(super) fn emit_mcp_call_metrics(
         );
     }
 
-    let (Some(error_type), Some(error_code)) = (outcome.error_type, outcome.error_code.as_deref())
+    let (Some(error_type), Some(error_category)) = (outcome.error_type, outcome.error_category)
     else {
         return;
     };
     let mut error_tags = tags;
-    error_tags.push(("error_type", sanitize_metric_tag_value(error_type)));
-    error_tags.push(("error_code", error_code.to_string()));
+    error_tags.push(("error_type", error_type.to_string()));
+    error_tags.push(("error_category", error_category.to_string()));
     let error_tag_refs: Vec<(&str, &str)> = error_tags
         .iter()
         .map(|(key, value)| (*key, value.as_str()))
@@ -89,23 +88,54 @@ pub(super) fn emit_mcp_call_metrics(
 fn mcp_call_metric_tags(
     status: &str,
     server_name: &str,
-    tool_name: &str,
+    _tool_name: &str,
     connector_id: Option<&str>,
     connector_name: Option<&str>,
 ) -> Vec<(&'static str, String)> {
-    let mut tags = vec![
-        ("status", sanitize_metric_tag_value(status)),
-        ("server", sanitize_metric_tag_value(server_name)),
-        ("tool", sanitize_metric_tag_value(tool_name)),
-    ];
-    if let Some(connector_id) = connector_id.filter(|connector_id| !connector_id.is_empty()) {
-        tags.push(("connector_id", sanitize_metric_tag_value(connector_id)));
+    let status = match status {
+        "ok" => "ok",
+        "error" => "error",
+        _ => "other",
+    };
+    let server = if server_name == CODEX_APPS_MCP_SERVER_NAME {
+        "codex_apps"
+    } else {
+        "custom"
+    };
+    let connector_present = connector_id.is_some_and(|value| !value.is_empty())
+        || connector_name.is_some_and(|value| !value.is_empty());
+    vec![
+        ("status", status.to_string()),
+        ("server", server.to_string()),
+        (
+            "tool",
+            if connector_present {
+                "connector"
+            } else {
+                "custom"
+            }
+            .to_string(),
+        ),
+        ("connector_present", connector_present.to_string()),
+    ]
+}
+
+fn mcp_error_category(error_code: Option<&str>) -> &'static str {
+    let Some(error_code) = error_code else {
+        return MCP_CALL_ERROR_CATEGORY_UNKNOWN;
+    };
+    let error_code = error_code.to_ascii_uppercase();
+    if error_code.contains("AUTH") || error_code.contains("UNAUTHORIZED") {
+        "authentication"
+    } else if error_code.contains("RATE") || error_code.contains("THROTTL") {
+        "rate_limit"
+    } else if error_code.contains("NOT_FOUND") {
+        "not_found"
+    } else if error_code.contains("INVALID") {
+        "invalid_request"
+    } else {
+        "other"
     }
-    if let Some(connector_name) = connector_name.filter(|connector_name| !connector_name.is_empty())
-    {
-        tags.push(("connector_name", sanitize_metric_tag_value(connector_name)));
-    }
-    tags
 }
 
 pub(super) fn mcp_call_metric_outcome(
@@ -139,22 +169,17 @@ pub(super) fn mcp_call_metric_outcome(
                         .and_then(JsonValue::as_str)
                         .filter(|error_code| !error_code.is_empty())
                 });
-            let error_code: String = error_code
-                .unwrap_or(MCP_CALL_ERROR_CODE_UNKNOWN)
-                .chars()
-                .take(MCP_CALL_ERROR_CODE_MAX_CHARS)
-                .collect();
             McpCallMetricOutcome {
                 status: "error",
                 error_type: Some(MCP_CALL_ERROR_TYPE_TOOL_RESULT),
-                error_code: Some(sanitize_metric_tag_value(&error_code)),
+                error_category: Some(mcp_error_category(error_code)),
             }
         }
         Ok(_) => McpCallMetricOutcome::from_status("ok"),
         Err(_) => McpCallMetricOutcome {
             status: "error",
             error_type: Some(MCP_CALL_ERROR_TYPE_MCP_REQUEST),
-            error_code: Some(MCP_CALL_ERROR_CODE_UNKNOWN.to_string()),
+            error_category: Some(MCP_CALL_ERROR_CATEGORY_UNKNOWN),
         },
     }
 }
@@ -164,11 +189,12 @@ pub(super) fn record_mcp_call_outcome_span_telemetry(
     result: &Result<CallToolResult, String>,
 ) {
     let outcome = mcp_call_metric_outcome(result);
-    let (Some(error_type), Some(error_code)) = (outcome.error_type, outcome.error_code) else {
+    let (Some(error_type), Some(error_category)) = (outcome.error_type, outcome.error_category)
+    else {
         return;
     };
     span.record(MCP_CALL_ERROR_TYPE_SPAN_ATTR, error_type);
-    span.record(MCP_CALL_ERROR_CODE_SPAN_ATTR, error_code);
+    span.record(MCP_CALL_ERROR_CATEGORY_SPAN_ATTR, error_category);
 }
 
 #[cfg(test)]

@@ -563,15 +563,23 @@ fn record_windows_sandbox_spawn_failure(
     windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
     err: &str,
 ) {
-    let Some(error_code) = extract_create_process_as_user_error_code(err) else {
+    if extract_create_process_as_user_error_code(err).is_none() {
         return;
-    };
+    }
     let path = command_path.unwrap_or("unknown");
     let exe = Path::new(path)
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("unknown")
         .to_ascii_lowercase();
+    let exe_category = match exe.as_str() {
+        "powershell.exe" | "pwsh.exe" => "powershell",
+        "cmd.exe" => "cmd",
+        "wsl.exe" => "wsl",
+        "bash.exe" => "bash",
+        "unknown" => "unknown",
+        _ => "other",
+    };
     let path_kind = windowsapps_path_kind(path);
     let level = if matches!(
         windows_sandbox_level,
@@ -586,9 +594,9 @@ fn record_windows_sandbox_spawn_failure(
             "codex.windows_sandbox.createprocessasuserw_failed",
             /*inc*/ 1,
             &[
-                ("error_code", error_code.as_str()),
+                ("error_type", "create_process_as_user"),
                 ("path_kind", path_kind),
-                ("exe", exe.as_str()),
+                ("exe_category", exe_category),
                 ("level", level),
             ],
         );

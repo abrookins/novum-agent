@@ -12,7 +12,7 @@ use codex_otel::GUARDIAN_REVIEW_DURATION_METRIC;
 use codex_otel::GUARDIAN_REVIEW_TOKEN_USAGE_METRIC;
 use codex_otel::GUARDIAN_REVIEW_TTFT_DURATION_METRIC;
 use codex_otel::SessionTelemetry;
-use codex_otel::sanitize_metric_tag_value;
+use codex_otel::bounded_model_category;
 use codex_protocol::protocol::GuardianAssessmentOutcome;
 use codex_protocol::protocol::GuardianRiskLevel;
 use codex_protocol::protocol::GuardianUserAuthorization;
@@ -124,18 +124,32 @@ fn guardian_review_metric_tags(
             result
                 .guardian_model
                 .as_deref()
-                .map(sanitize_metric_tag_value)
-                .unwrap_or_else(|| "none".to_string()),
+                .map(bounded_model_category)
+                .unwrap_or("none")
+                .to_string(),
         ),
         (
             "guardian_reasoning_effort",
             result
                 .guardian_reasoning_effort
                 .as_deref()
-                .map(sanitize_metric_tag_value)
-                .unwrap_or_else(|| "none".to_string()),
+                .map(bounded_reasoning_effort)
+                .unwrap_or("none")
+                .to_string(),
         ),
     ]
+}
+
+fn bounded_reasoning_effort(reasoning_effort: &str) -> &'static str {
+    match reasoning_effort {
+        "none" => "none",
+        "minimal" => "minimal",
+        "low" => "low",
+        "medium" => "medium",
+        "high" => "high",
+        "xhigh" => "xhigh",
+        _ => "other",
+    }
 }
 
 fn decision_tag(decision: GuardianReviewDecision) -> &'static str {
@@ -389,7 +403,7 @@ mod tests {
                 ),
                 ("decision".to_string(), "approved".to_string()),
                 ("failure_reason".to_string(), "none".to_string()),
-                ("guardian_model".to_string(), "gpt-5.4_guardian".to_string()),
+                ("guardian_model".to_string(), "openai".to_string()),
                 ("guardian_reasoning_effort".to_string(), "low".to_string()),
                 ("had_prior_review_context".to_string(), "true".to_string()),
                 ("outcome".to_string(), "allow".to_string()),
