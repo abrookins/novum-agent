@@ -1210,17 +1210,25 @@ impl SessionTelemetry {
         tool_name: &str,
         _call_id: &str,
         decision: &ReviewDecision,
-        source: ToolDecisionSource,
+        source: Option<ToolDecisionSource>,
     ) {
         let tool_name = bounded_tool_category(tool_name, /*is_mcp*/ false);
         let decision = decision.to_opaque_string();
-        log_event!(
-            self,
-            event.name = "codex.tool_decision",
-            tool_name = %tool_name,
-            decision = %decision,
-            source = %source.to_string(),
-        );
+        match source {
+            Some(source) => log_event!(
+                self,
+                event.name = "codex.tool_decision",
+                tool_name = %tool_name,
+                decision = %decision,
+                source = %source.to_string(),
+            ),
+            None => log_event!(
+                self,
+                event.name = "codex.tool_decision",
+                tool_name = %tool_name,
+                decision = %decision,
+            ),
+        }
     }
 
     pub fn sandbox_outcome(

@@ -344,6 +344,16 @@ mod worker {
     }
 
     pub(super) async fn run(codex_home: PathBuf) -> io::Result<()> {
+        let Some(_maintenance_guard) =
+            crate::try_acquire_rollout_maintenance_lock(codex_home.as_path())?
+        else {
+            metrics::run("skipped_maintenance");
+            debug!(
+                "rollout maintenance is already running for {}",
+                codex_home.display()
+            );
+            return Ok(());
+        };
         let marker = match CompressionRunMarker::try_claim(codex_home.as_path()) {
             Ok(Some(marker)) => marker,
             Ok(None) => {
@@ -481,12 +491,17 @@ mod worker {
                     continue;
                 }
                 let path = rollout_file.into_path();
+                let Some(rollout_id) = crate::rollout_id_from_path(path.as_path()) else {
+                    stats.skipped = stats.skipped.saturating_add(1);
+                    metrics::file("skipped_unreadable_meta");
+                    continue;
+                };
                 let Ok(meta) = crate::read_session_meta_line(path.as_path()).await else {
                     stats.skipped = stats.skipped.saturating_add(1);
                     metrics::file("skipped_unreadable_meta");
                     continue;
                 };
-                if reference_index.reference_count(meta.meta.id) > 0 {
+                if reference_index.reference_count(rollout_id) > 0 {
                     stats.skipped = stats.skipped.saturating_add(1);
                     metrics::file("skipped_referenced");
                     continue;

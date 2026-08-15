@@ -25,6 +25,12 @@ max-threads = 4
 [test-groups.core_apply_patch_cli_integration]
 max-threads = 1
 
+[test-groups.core_otel_integration]
+max-threads = 1
+
+[test-groups.core_turn_integration]
+max-threads = 4
+
 [test-groups.otel_http_loopback]
 max-threads = 1
 
@@ -70,6 +76,18 @@ test-group = 'app_server_integration_local'
 # sensitive to Windows runner process-startup stalls when many cases launch at once.
 filter = 'package(codex-core) & kind(test) & test(apply_patch_cli)'
 test-group = 'core_apply_patch_cli_integration'
+
+[[profile.default.overrides]]
+# Full-turn tests run local mock servers and exceed their event deadlines when
+# all logical cores are busy. Keep developer runs stable without limiting unit tests.
+filter = 'package(codex-core) & kind(test) & test(suite::)'
+test-group = 'core_turn_integration'
+
+[[profile.default.overrides]]
+# These tests install tracing capture layers and drive full Codex turns through local servers.
+# Run them serially so concurrent captures and servers cannot cross-contend.
+filter = 'package(codex-core) & test(suite::otel::)'
+test-group = 'core_otel_integration'
 
 [[profile.default.overrides]]
 # These tests create restricted-token Windows child processes and private desktops.

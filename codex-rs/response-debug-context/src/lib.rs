@@ -71,6 +71,7 @@ pub fn telemetry_transport_error_type(error: &TransportError) -> &'static str {
         TransportError::Http { .. } => "http",
         TransportError::RetryLimit => "retry_limit",
         TransportError::Timeout => "timeout",
+        TransportError::Connection(_) => "connection",
         TransportError::Network(_) => "network",
         TransportError::Build(_) => "build",
     }
@@ -88,6 +89,7 @@ pub fn telemetry_api_error_type(error: &ApiError) -> &'static str {
         ApiError::RateLimit(_) => "rate_limit",
         ApiError::InvalidRequest { .. } => "invalid_request",
         ApiError::CyberPolicy { .. } => "cyber_policy",
+        ApiError::MisalignmentPolicyViolation { .. } => "misalignment_policy_violation",
         ApiError::ServerOverloaded => "server_overloaded",
     }
 }

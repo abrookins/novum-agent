@@ -788,9 +788,9 @@ fn emit_socks_block_decision_audit_event(
     source: NetworkDecisionSource,
     reason: &str,
     protocol: NetworkProtocol,
-    _host: &str,
+    host: &str,
     port: u16,
-    _client_addr: Option<&str>,
+    client_addr: Option<&str>,
 ) {
     emit_block_decision_audit_event(
         state,
@@ -798,8 +798,10 @@ fn emit_socks_block_decision_audit_event(
             source,
             reason,
             protocol,
+            server_address: host,
             server_port: port,
             method: None,
+            client_addr,
         },
     );
 }
