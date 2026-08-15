@@ -32,6 +32,7 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::TruncationPolicy;
 use codex_rollout::state_db;
 use codex_shell_command::parse_command::parse_shell_script;
 use codex_tools::ToolName;
@@ -168,6 +169,7 @@ pub(crate) struct AnyToolResult {
     pub(crate) call_id: String,
     pub(crate) payload: ToolPayload,
     pub(crate) result: Box<dyn ToolOutput>,
+    pub(crate) truncation_policy: TruncationPolicy,
     pub(crate) post_tool_use_payload: Option<PostToolUsePayload>,
 }
 
@@ -184,9 +186,12 @@ impl AnyToolResult {
 
     pub(crate) fn code_mode_result(self) -> serde_json::Value {
         let Self {
-            payload, result, ..
+            payload,
+            result,
+            truncation_policy,
+            ..
         } = self;
-        result.code_mode_result(&payload)
+        result.code_mode_result_with_policy(&payload, truncation_policy * 1.2)
     }
 }
 
@@ -210,6 +215,14 @@ impl ToolOutput for PostToolUseFeedbackOutput {
 
     fn code_mode_result(&self, payload: &ToolPayload) -> Value {
         self.original.code_mode_result(payload)
+    }
+
+    fn code_mode_result_with_policy(
+        &self,
+        payload: &ToolPayload,
+        policy: TruncationPolicy,
+    ) -> Value {
+        self.original.code_mode_result_with_policy(payload, policy)
     }
 }
 
@@ -756,6 +769,7 @@ async fn handle_any_tool(
 ) -> Result<AnyToolResult, FunctionCallError> {
     let call_id = invocation.call_id.clone();
     let payload = invocation.payload.clone();
+    let truncation_policy = invocation.turn.model_info.truncation_policy.into();
     let output = tool.handle(invocation.clone()).await?;
     if output.contains_external_context()
         && invocation.turn.config.memories.disable_on_external_context
@@ -773,6 +787,7 @@ async fn handle_any_tool(
         call_id,
         payload,
         result: output,
+        truncation_policy,
         post_tool_use_payload,
     })
 }

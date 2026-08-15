@@ -372,6 +372,29 @@ impl ToolOutput for ExecCommandToolOutput {
     }
 
     fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
+        self.code_mode_result_with_max_tokens(self.model_output_max_tokens())
+    }
+
+    fn code_mode_result_with_policy(
+        &self,
+        _payload: &ToolPayload,
+        policy: TruncationPolicy,
+    ) -> JsonValue {
+        let mut max_tokens = self.model_output_max_tokens().min(policy.token_budget());
+        loop {
+            let result = self.code_mode_result_with_max_tokens(max_tokens);
+            let serialized_len =
+                serde_json::to_string(&result).map_or(usize::MAX, |serialized| serialized.len());
+            if serialized_len <= policy.byte_budget() || max_tokens == 1 {
+                return result;
+            }
+            max_tokens = (max_tokens / 2).max(1);
+        }
+    }
+}
+
+impl ExecCommandToolOutput {
+    fn code_mode_result_with_max_tokens(&self, max_tokens: usize) -> JsonValue {
         #[derive(Serialize)]
         struct UnifiedExecCodeModeResult {
             #[serde(skip_serializing_if = "Option::is_none")]
@@ -392,19 +415,13 @@ impl ToolOutput for ExecCommandToolOutput {
             exit_code: self.exit_code,
             session_id: self.process_id,
             original_token_count: self.original_token_count,
-            output: match self.max_output_tokens {
-                Some(max_tokens) => self.truncated_output(max_tokens),
-                None => String::from_utf8_lossy(&self.raw_output).to_string(),
-            },
+            output: self.truncated_output(max_tokens),
         };
 
         serde_json::to_value(result).unwrap_or_else(|err| {
             JsonValue::String(format!("failed to serialize exec result: {err}"))
         })
     }
-}
-
-impl ExecCommandToolOutput {
     fn model_output_max_tokens(&self) -> usize {
         resolve_max_tokens(self.max_output_tokens).min(self.truncation_policy.token_budget())
     }

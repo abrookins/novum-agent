@@ -27,6 +27,7 @@ use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::protocol::TruncationPolicy;
 
 struct ToolCallTimingGuard {
     started_at: Instant,
@@ -204,7 +205,11 @@ impl ToolCallRuntime {
                                 Err(err) => return Err(Self::tool_task_join_error(err)),
                             }
                         }
-                        let response = Self::aborted_response(&call, secs);
+                        let response = Self::aborted_response(
+                            &call,
+                            secs,
+                            abort_turn.model_info.truncation_policy.into(),
+                        );
                         notify_tool_aborted(
                             abort_session.as_ref(),
                             abort_turn.as_ref(),
@@ -254,13 +259,18 @@ impl ToolCallRuntime {
         }
     }
 
-    fn aborted_response(call: &ToolCall, secs: f32) -> AnyToolResult {
+    fn aborted_response(
+        call: &ToolCall,
+        secs: f32,
+        truncation_policy: TruncationPolicy,
+    ) -> AnyToolResult {
         AnyToolResult {
             call_id: call.call_id.clone(),
             payload: call.payload.clone(),
             result: Box::new(AbortedToolOutput {
                 message: Self::abort_message(call, secs),
             }),
+            truncation_policy,
             post_tool_use_payload: None,
         }
     }

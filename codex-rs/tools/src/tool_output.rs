@@ -3,6 +3,8 @@ use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::protocol::TruncationPolicy;
+use codex_utils_output_truncation::truncate_text;
 use codex_utils_string::take_bytes_at_char_boundary;
 use serde_json::Value as JsonValue;
 
@@ -50,6 +52,15 @@ pub trait ToolOutput: Send {
     fn code_mode_result(&self, payload: &ToolPayload) -> JsonValue {
         response_input_to_code_mode_result(self.to_response_item("", payload))
     }
+
+    /// Returns the bounded result supplied to the Code Mode runtime.
+    fn code_mode_result_with_policy(
+        &self,
+        payload: &ToolPayload,
+        policy: TruncationPolicy,
+    ) -> JsonValue {
+        truncate_code_mode_result(self.code_mode_result(payload), policy)
+    }
 }
 
 impl<T> ToolOutput for Box<T>
@@ -86,6 +97,14 @@ where
 
     fn code_mode_result(&self, payload: &ToolPayload) -> JsonValue {
         (**self).code_mode_result(payload)
+    }
+
+    fn code_mode_result_with_policy(
+        &self,
+        payload: &ToolPayload,
+        policy: TruncationPolicy,
+    ) -> JsonValue {
+        (**self).code_mode_result_with_policy(payload, policy)
     }
 }
 
@@ -188,6 +207,22 @@ impl ToolOutput for codex_protocol::mcp::CallToolResult {
             fields.remove("_meta");
         }
         result
+    }
+}
+
+fn truncate_code_mode_result(result: JsonValue, policy: TruncationPolicy) -> JsonValue {
+    match result {
+        JsonValue::String(text) => JsonValue::String(truncate_text(&text, policy)),
+        value => {
+            let serialized = serde_json::to_string(&value)
+                .unwrap_or_else(|err| format!("failed to serialize Code Mode tool result: {err}"));
+            let truncated = truncate_text(&serialized, policy);
+            if truncated == serialized {
+                value
+            } else {
+                JsonValue::String(truncated)
+            }
+        }
     }
 }
 

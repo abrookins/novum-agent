@@ -590,6 +590,7 @@ fn post_tool_use_feedback_output_keeps_code_mode_result_typed() {
                 /*success*/ None,
             ),
         }),
+        truncation_policy: TruncationPolicy::Tokens(/*limit*/ 1_000),
         post_tool_use_payload: None,
     };
 
@@ -617,6 +618,7 @@ fn post_tool_use_feedback_output_keeps_code_mode_result_typed() {
                 /*success*/ None,
             ),
         }),
+        truncation_policy: TruncationPolicy::Tokens(/*limit*/ 1_000),
         post_tool_use_payload: None,
     };
 
@@ -624,6 +626,29 @@ fn post_tool_use_feedback_output_keeps_code_mode_result_typed() {
         result.code_mode_result(),
         serde_json::json!({ "typed": true })
     );
+}
+
+#[test]
+fn code_mode_result_truncates_oversized_text() {
+    let result = AnyToolResult {
+        call_id: "call-1".to_string(),
+        payload: ToolPayload::Function {
+            arguments: "{}".to_string(),
+        },
+        result: Box::new(crate::tools::context::FunctionToolOutput::from_text(
+            "head-marker-0123456789-middle-marker-0123456789-tail-marker".to_string(),
+            Some(true),
+        )),
+        truncation_policy: TruncationPolicy::Tokens(/*limit*/ 5),
+        post_tool_use_payload: None,
+    };
+
+    let output = result.code_mode_result();
+    let output = output.as_str().expect("Code Mode result should be text");
+    assert!(output.contains("head-marker"));
+    assert!(output.contains("tail-marker"));
+    assert!(output.contains("tokens truncated"));
+    assert!(!output.contains("middle-marker"));
 }
 
 #[tokio::test]

@@ -1822,8 +1822,7 @@ text(`Variable truncated: ${resultVariableWasTruncated ? "True" : "False"}. Vari
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_exec_nested_limit_preserves_result_variable_before_configured_history_truncation()
--> Result<()> {
+async fn code_mode_exec_nested_result_obeys_configured_history_truncation() -> Result<()> {
     // TODO(anp): Remove after Wine exec returns complete nested-tool output to code mode.
     skip_if_wine_exec!(
         Ok(()),
@@ -1840,8 +1839,8 @@ const result = await tools.exec_command({
   cmd: "python3 -c \"import sys; sys.stdout.write('x' * 50000)\"",
   max_output_tokens: 20000
 });
-const resultVariableWasTruncated = result.output.length !== 50000;
-text(`Variable truncated: ${resultVariableWasTruncated ? "True" : "False"}. Variable: ${result.output}`);
+const resultVariableWasTruncated = result.output.includes("tokens truncated");
+text(`Variable truncated: ${resultVariableWasTruncated ? "True" : "False"}. Result type: ${typeof result}.`);
 "#,
         TOKEN_POLICY_TEST_MODEL,
         |config| {
@@ -1850,19 +1849,14 @@ text(`Variable truncated: ${resultVariableWasTruncated ? "True" : "False"}. Vari
     )
     .await?;
 
-    let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
+    let request = second_mock.single_request();
+    let (_, success) = request
+        .custom_tool_call_output_content_and_success("call-1")
+        .expect("Code Mode output should be present");
+    assert_ne!(success, Some(false));
+    let items = custom_tool_output_items(&request, "call-1");
     let output = text_item(&items, /*index*/ 1);
-    // The 50-token override must shrink this 50,000-character value far below
-    // what the default 10,000-token history cap would retain.
-    assert!(
-        output.len() < 1_000,
-        "expected configured history cap to truncate the emitted value, got {} bytes",
-        output.len()
-    );
-    assert_regex_match(
-        r"^Variable truncated: False\. Variable: x+…\d+ tokens truncated…x+$",
-        output,
-    );
+    assert_eq!(output, "Variable truncated: True. Result type: object.");
 
     Ok(())
 }
@@ -1906,7 +1900,7 @@ text(`Variable truncated: ${resultVariableWasTruncated ? "True" : "False"}. Vari
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_exec_without_nested_limit_preserves_result_variable_before_configured_history_truncation()
+async fn code_mode_exec_nested_result_without_limit_obeys_configured_history_truncation()
 -> Result<()> {
     // TODO(anp): Remove after Wine exec returns complete nested-tool output to code mode.
     skip_if_wine_exec!(
@@ -1923,8 +1917,8 @@ async fn code_mode_exec_without_nested_limit_preserves_result_variable_before_co
 const result = await tools.exec_command({
   cmd: "python3 -c \"import sys; sys.stdout.write('x' * 50000)\""
 });
-const resultVariableWasTruncated = result.output.length !== 50000;
-text(`Variable truncated: ${resultVariableWasTruncated ? "True" : "False"}. Variable: ${result.output}`);
+const resultVariableWasTruncated = result.output.includes("tokens truncated");
+text(`Variable truncated: ${resultVariableWasTruncated ? "True" : "False"}. Result type: ${typeof result}.`);
 "#,
         TOKEN_POLICY_TEST_MODEL,
         |config| {
@@ -1933,19 +1927,14 @@ text(`Variable truncated: ${resultVariableWasTruncated ? "True" : "False"}. Vari
     )
     .await?;
 
-    let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
+    let request = second_mock.single_request();
+    let (_, success) = request
+        .custom_tool_call_output_content_and_success("call-1")
+        .expect("Code Mode output should be present");
+    assert_ne!(success, Some(false));
+    let items = custom_tool_output_items(&request, "call-1");
     let output = text_item(&items, /*index*/ 1);
-    // The 50-token override must shrink this 50,000-character value far below
-    // what the default 10,000-token history cap would retain.
-    assert!(
-        output.len() < 1_000,
-        "expected configured history cap to truncate the emitted value, got {} bytes",
-        output.len()
-    );
-    assert_regex_match(
-        r"^Variable truncated: False\. Variable: x+…\d+ tokens truncated…x+$",
-        output,
-    );
+    assert_eq!(output, "Variable truncated: True. Result type: object.");
 
     Ok(())
 }
