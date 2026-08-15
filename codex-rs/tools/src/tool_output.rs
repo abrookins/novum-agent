@@ -97,6 +97,23 @@ pub trait ToolOutput: Send {
         JsonValue::String(preview)
     }
 
+    /// Returns the bounded Code Mode value after textual output is replaced
+    /// with a recoverable-output preview.
+    ///
+    /// Structured output types can override this to preserve their shape when
+    /// the preview itself must be reduced further.
+    fn code_mode_result_with_recoverable_preview_and_policy(
+        &self,
+        payload: &ToolPayload,
+        preview: String,
+        policy: TruncationPolicy,
+    ) -> JsonValue {
+        truncate_code_mode_result(
+            self.code_mode_result_with_recoverable_preview(payload, preview),
+            policy,
+        )
+    }
+
     /// Returns lossless textual output suitable for a recoverable handle.
     ///
     /// Non-text content is deliberately excluded so image, audio, and mixed
@@ -171,6 +188,15 @@ where
         preview: String,
     ) -> JsonValue {
         (**self).code_mode_result_with_recoverable_preview(payload, preview)
+    }
+
+    fn code_mode_result_with_recoverable_preview_and_policy(
+        &self,
+        payload: &ToolPayload,
+        preview: String,
+        policy: TruncationPolicy,
+    ) -> JsonValue {
+        (**self).code_mode_result_with_recoverable_preview_and_policy(payload, preview, policy)
     }
 
     fn untruncated_text(&self, payload: &ToolPayload) -> Option<String> {

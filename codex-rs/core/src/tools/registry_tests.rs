@@ -747,6 +747,15 @@ fn recoverable_exec_preview_keeps_code_mode_result_typed() {
             "output": "preview with handle",
         })
     );
+
+    let bounded =
+        output.code_mode_result_with_policy(&payload, TruncationPolicy::Tokens(/*limit*/ 1));
+    assert!(bounded.is_object());
+    assert!(
+        bounded["output"]
+            .as_str()
+            .is_some_and(|output| output.contains("truncated"))
+    );
 }
 
 #[test]

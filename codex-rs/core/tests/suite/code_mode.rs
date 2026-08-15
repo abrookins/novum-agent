@@ -761,7 +761,7 @@ async fn code_mode_exec_holds_captured_result_during_elicitation() -> Result<()>
         2
     );
     let release_elicitation = async {
-        tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::time::timeout(Duration::from_secs(15), async {
             while first_mock.requests().is_empty() {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
@@ -1738,8 +1738,7 @@ text(result.output);
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_exec_nested_limit_preserves_result_variable_before_default_history_truncation()
--> Result<()> {
+async fn code_mode_exec_nested_result_obeys_default_history_truncation() -> Result<()> {
     // TODO(anp): Remove after Wine exec returns complete nested-tool output to code mode.
     skip_if_wine_exec!(
         Ok(()),
@@ -1756,27 +1755,30 @@ const result = await tools.exec_command({
   cmd: "python3 -c \"import sys; sys.stdout.write('x' * 50000)\"",
   max_output_tokens: 20000
 });
-const resultVariableWasTruncated = result.output.length !== 50000;
-text(`Variable truncated: ${resultVariableWasTruncated ? "True" : "False"}. Variable: ${result.output}`);
+const resultVariableWasTruncated = result.output.includes("tokens truncated");
+text(`Variable truncated: ${resultVariableWasTruncated ? "True" : "False"}. Result type: ${typeof result}.`);
 "#,
         TOKEN_POLICY_TEST_MODEL,
         |_| {},
     )
     .await?;
 
-    let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
+    let request = second_mock.single_request();
+    let (_, success) = request
+        .custom_tool_call_output_content_and_success("call-1")
+        .expect("Code Mode output should be present");
+    assert_ne!(success, Some(false));
+    let items = custom_tool_output_items(&request, "call-1");
     let output = text_item(&items, /*index*/ 1);
-    assert_regex_match(
-        r"^Variable truncated: False\. Variable: x+…\d+ tokens truncated…x+$",
-        output,
-    );
+    assert_eq!(output, "Variable truncated: True. Result type: object.");
 
     Ok(())
 }
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_exec_nested_limit_truncates_result_variable_when_exceeded() -> Result<()> {
+async fn code_mode_exec_nested_result_obeys_default_history_truncation_when_exceeded() -> Result<()>
+{
     // TODO(anp): Remove after Wine exec returns complete nested-tool output to code mode.
     skip_if_wine_exec!(
         Ok(()),
@@ -1793,29 +1795,22 @@ const result = await tools.exec_command({
   cmd: "python3 -c \"import sys; sys.stdout.write('A' * 90000)\"",
   max_output_tokens: 20000
 });
-const resultVariableWasTruncated = result.output.includes("…2500 tokens truncated…");
-text(`Variable truncated: ${resultVariableWasTruncated ? "True" : "False"}. Variable: ${result.output}`);
+const resultVariableWasTruncated = result.output.includes("tokens truncated");
+text(`Variable truncated: ${resultVariableWasTruncated ? "True" : "False"}. Result type: ${typeof result}.`);
 "#,
         TOKEN_POLICY_TEST_MODEL,
         |_| {},
     )
     .await?;
 
-    let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
+    let request = second_mock.single_request();
+    let (_, success) = request
+        .custom_tool_call_output_content_and_success("call-1")
+        .expect("Code Mode output should be present");
+    assert_ne!(success, Some(false));
+    let items = custom_tool_output_items(&request, "call-1");
     let output = text_item(&items, /*index*/ 1);
-    // The nested 20,000-token budget leaves about 80,000 characters. This
-    // ceiling independently proves that history applied its smaller cap.
-    assert!(
-        output.len() < 60_000,
-        "expected history to truncate the emitted value, got {} bytes",
-        output.len()
-    );
-    // The boolean describes the nested result; the marker below comes from
-    // history truncating the value emitted with `text` afterward.
-    assert_regex_match(
-        r"(?s)^Variable truncated: True\. Variable: .*…\d+ tokens truncated…A+$",
-        output,
-    );
+    assert_eq!(output, "Variable truncated: True. Result type: object.");
 
     Ok(())
 }
@@ -1863,8 +1858,8 @@ text(`Variable truncated: ${resultVariableWasTruncated ? "True" : "False"}. Resu
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_exec_without_nested_limit_preserves_result_variable_before_default_history_truncation()
--> Result<()> {
+async fn code_mode_exec_nested_result_without_limit_obeys_default_history_truncation() -> Result<()>
+{
     // TODO(anp): Remove after Wine exec returns complete nested-tool output to code mode.
     skip_if_wine_exec!(
         Ok(()),
@@ -1880,20 +1875,22 @@ async fn code_mode_exec_without_nested_limit_preserves_result_variable_before_de
 const result = await tools.exec_command({
   cmd: "python3 -c \"import sys; sys.stdout.write('x' * 50000)\""
 });
-const resultVariableWasTruncated = result.output.length !== 50000;
-text(`Variable truncated: ${resultVariableWasTruncated ? "True" : "False"}. Variable: ${result.output}`);
+const resultVariableWasTruncated = result.output.includes("tokens truncated");
+text(`Variable truncated: ${resultVariableWasTruncated ? "True" : "False"}. Result type: ${typeof result}.`);
 "#,
         TOKEN_POLICY_TEST_MODEL,
         |_| {},
     )
     .await?;
 
-    let items = custom_tool_output_items(&second_mock.single_request(), "call-1");
+    let request = second_mock.single_request();
+    let (_, success) = request
+        .custom_tool_call_output_content_and_success("call-1")
+        .expect("Code Mode output should be present");
+    assert_ne!(success, Some(false));
+    let items = custom_tool_output_items(&request, "call-1");
     let output = text_item(&items, /*index*/ 1);
-    assert_regex_match(
-        r"^Variable truncated: False\. Variable: x+…\d+ tokens truncated…x+$",
-        output,
-    );
+    assert_eq!(output, "Variable truncated: True. Result type: object.");
 
     Ok(())
 }

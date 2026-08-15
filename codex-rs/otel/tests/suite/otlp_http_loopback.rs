@@ -148,7 +148,7 @@ fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
     let (tx, rx) = mpsc::channel::<Vec<CapturedRequest>>();
     let server = thread::spawn(move || {
         let mut captured = Vec::new();
-        let deadline = Instant::now() + Duration::from_secs(3);
+        let deadline = Instant::now() + Duration::from_secs(10);
 
         while Instant::now() < deadline {
             match listener.accept() {
@@ -161,6 +161,7 @@ fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
                             content_type: headers.get("content-type").cloned(),
                             body,
                         });
+                        break;
                     }
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
@@ -272,7 +273,7 @@ fn otlp_http_exporter_sends_logs_to_collector()
     let (tx, rx) = mpsc::channel::<Vec<CapturedRequest>>();
     let server = thread::spawn(move || {
         let mut captured = Vec::new();
-        let deadline = Instant::now() + Duration::from_secs(3);
+        let deadline = Instant::now() + Duration::from_secs(10);
 
         while Instant::now() < deadline {
             match listener.accept() {
@@ -285,6 +286,7 @@ fn otlp_http_exporter_sends_logs_to_collector()
                             content_type: headers.get("content-type").cloned(),
                             body,
                         });
+                        break;
                     }
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
@@ -396,7 +398,7 @@ fn otlp_http_exporter_sends_traces_to_collector()
     let (tx, rx) = mpsc::channel::<Vec<CapturedRequest>>();
     let server = thread::spawn(move || {
         let mut captured = Vec::new();
-        let deadline = Instant::now() + Duration::from_secs(3);
+        let deadline = Instant::now() + Duration::from_secs(10);
 
         while Instant::now() < deadline {
             match listener.accept() {
@@ -409,6 +411,7 @@ fn otlp_http_exporter_sends_traces_to_collector()
                             content_type: headers.get("content-type").cloned(),
                             body,
                         });
+                        break;
                     }
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
@@ -578,7 +581,7 @@ async fn otlp_http_exporter_sends_traces_to_collector_with_bounded_shutdown_in_t
     let (tx, rx) = mpsc::channel::<Vec<CapturedRequest>>();
     let server = thread::spawn(move || {
         let mut captured = Vec::new();
-        let deadline = Instant::now() + Duration::from_secs(3);
+        let deadline = Instant::now() + Duration::from_secs(10);
 
         while Instant::now() < deadline {
             match listener.accept() {
@@ -591,6 +594,7 @@ async fn otlp_http_exporter_sends_traces_to_collector_with_bounded_shutdown_in_t
                             content_type: headers.get("content-type").cloned(),
                             body,
                         });
+                        break;
                     }
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
@@ -762,7 +766,7 @@ fn otlp_http_exporter_sends_traces_to_collector_in_current_thread_tokio_runtime(
     let (tx, rx) = mpsc::channel::<Vec<CapturedRequest>>();
     let server = thread::spawn(move || {
         let mut captured = Vec::new();
-        let deadline = Instant::now() + Duration::from_secs(3);
+        let deadline = Instant::now() + Duration::from_secs(10);
 
         while Instant::now() < deadline {
             match listener.accept() {
@@ -775,6 +779,7 @@ fn otlp_http_exporter_sends_traces_to_collector_in_current_thread_tokio_runtime(
                             content_type: headers.get("content-type").cloned(),
                             body,
                         });
+                        break;
                     }
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {

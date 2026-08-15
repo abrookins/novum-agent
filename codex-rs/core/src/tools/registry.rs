@@ -245,6 +245,19 @@ impl ToolOutput for RecoverableOutputPreview {
             .code_mode_result_with_recoverable_preview(payload, self.preview.clone())
     }
 
+    fn code_mode_result_with_policy(
+        &self,
+        payload: &ToolPayload,
+        policy: TruncationPolicy,
+    ) -> Value {
+        self.original
+            .code_mode_result_with_recoverable_preview_and_policy(
+                payload,
+                self.preview.clone(),
+                policy,
+            )
+    }
+
     fn untruncated_text(&self, _payload: &ToolPayload) -> Option<String> {
         // A retrieval result must not produce a second handle.
         None

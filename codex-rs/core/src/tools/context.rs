@@ -423,6 +423,27 @@ impl ToolOutput for ExecCommandToolOutput {
         self.code_mode_result_with_output(preview)
     }
 
+    fn code_mode_result_with_recoverable_preview_and_policy(
+        &self,
+        _payload: &ToolPayload,
+        preview: String,
+        policy: TruncationPolicy,
+    ) -> JsonValue {
+        let mut max_tokens = policy.token_budget();
+        loop {
+            let result = self.code_mode_result_with_output(truncate_text(
+                &preview,
+                TruncationPolicy::Tokens(max_tokens),
+            ));
+            let serialized_len =
+                serde_json::to_string(&result).map_or(usize::MAX, |serialized| serialized.len());
+            if serialized_len <= policy.byte_budget() || max_tokens == 1 {
+                return result;
+            }
+            max_tokens = (max_tokens / 2).max(1);
+        }
+    }
+
     fn untruncated_text(&self, _payload: &ToolPayload) -> Option<String> {
         Some(String::from_utf8_lossy(&self.raw_output).into_owned())
     }
