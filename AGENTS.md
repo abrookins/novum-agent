@@ -65,7 +65,25 @@ Run `just fmt` (in the `codex-rs` directory) automatically after you have finish
 
 1. Do not run `cargo test` directly. Use `just test` so test execution follows the repo defaults.
 2. Run the test for the specific project that was changed. For example, if changes were made in `codex-rs/tui`, run `just test -p codex-tui`.
-3. Once those pass, if any changes were made in common, core, or protocol, run the complete test suite with `just test`. Avoid `--all-features` for routine local runs because it expands the build matrix and can significantly increase `target/` disk usage; use it only when you specifically need full feature coverage. project-specific or individual tests can be run without asking the user, but do ask the user before running the complete test suite.
+3. Do not run the complete test suite with `just test` by default. The full workspace suite is opt-in and requires an explicit user request, including after changes to common, core, or protocol. Avoid `--all-features` for routine local runs because it expands the build matrix and can significantly increase `target/` disk usage; use it only when you specifically need full feature coverage.
+
+### Personal fork validation policy
+
+Treat this checkout as Andrew's private macOS fork unless the user says the work is intended for an upstream PR or release.
+
+- For routine patches, test the affected crates and the changed behavior, run scoped Clippy, format the repository, build the user-facing binary, and perform a focused smoke test. The selected gate must pass before completion.
+- For OTEL or telemetry-privacy patches, use this default gate:
+  - `just test -p codex-otel`
+  - `just test -p codex-core -E 'test(otel) or test(telemetry) or test(subagent_notifications)'`
+  - `just test -p codex-network-proxy -p codex-model-provider -p codex-http-client` when those crates changed
+  - `just clippy -p codex-otel -p codex-core`
+  - `just fmt`
+  - `cargo build -p codex-cli`
+  - Run `./target/debug/codex --version` and a privacy canary confirming that sensitive values are absent from exported telemetry while expected aggregate metrics remain present.
+- For other patch types, use the analogous affected-crate tests plus the smallest relevant integration test and binary smoke test.
+- Do not run Linux, Windows, Bazel, or full workspace test matrices for a private macOS patch unless the changed surface specifically requires them or the user requests them. Required generated lockfile or schema updates still apply.
+- Expand beyond the targeted gate only when a targeted failure indicates wider impact, the change affects an external compatibility surface that targeted tests do not cover, or the user explicitly asks for upstream/release confidence.
+- Host-specific or flaky failures should be rerun in a focused, isolated form and reported. They do not by themselves justify starting the full workspace suite.
 
 Before finalizing a large change to `codex-rs`, run `just fix -p <project>` (in `codex-rs` directory) to fix any linter issues in the code. Prefer scoping with `-p` to avoid slow workspace‑wide Clippy builds; only run `just fix` without `-p` if you changed shared crates. Do not re-run tests after running `fix` or `fmt`.
 
