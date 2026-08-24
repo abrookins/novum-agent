@@ -44,7 +44,7 @@ struct SearchArgs {
 struct RetrievalOutput(JsonValue);
 
 impl ToolOutput for RetrievalOutput {
-    fn log_preview(&self) -> String {
+    fn log_output(&self) -> String {
         self.0.to_string()
     }
 

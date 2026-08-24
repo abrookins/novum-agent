@@ -384,7 +384,7 @@ fn log_preview_uses_content_items_when_plain_text_is_missing() {
         Some(true),
     );
 
-    assert_eq!(output.log_preview(), "preview");
+    assert_eq!(output.log_output(), "preview");
     assert_eq!(
         function_call_output_content_items_to_text(&output.body),
         Some("preview".to_string())

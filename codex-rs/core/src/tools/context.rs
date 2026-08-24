@@ -3,9 +3,6 @@ use crate::original_image_detail::sanitize_original_image_detail;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
-use crate::tools::TELEMETRY_PREVIEW_MAX_BYTES;
-use crate::tools::TELEMETRY_PREVIEW_MAX_LINES;
-use crate::tools::TELEMETRY_PREVIEW_TRUNCATION_NOTICE;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::unified_exec::format_output_omission_marker;
 use crate::unified_exec::resolve_max_tokens;
@@ -30,6 +27,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
+
+const TELEMETRY_PREVIEW_MAX_BYTES: usize = 2 * 1024;
+const TELEMETRY_PREVIEW_MAX_LINES: usize = 64;
+const TELEMETRY_PREVIEW_TRUNCATION_NOTICE: &str = "[... telemetry preview truncated ...]";
 
 pub use codex_tools::ToolOutput;
 pub use codex_tools::ToolPayload;
@@ -81,7 +82,7 @@ pub struct McpToolOutput {
 }
 
 impl ToolOutput for McpToolOutput {
-    fn log_preview(&self) -> String {
+    fn log_output(&self) -> String {
         let payload = self.response_payload();
         let preview = payload.body.to_text().unwrap_or_else(|| {
             serde_json::to_string(&self.result.content)
@@ -157,7 +158,7 @@ pub struct ToolSearchOutput {
 }
 
 impl ToolOutput for ToolSearchOutput {
-    fn log_preview(&self) -> String {
+    fn log_output(&self) -> String {
         let tools = self
             .tools
             .iter()
@@ -224,7 +225,7 @@ impl FunctionToolOutput {
 }
 
 impl ToolOutput for FunctionToolOutput {
-    fn log_preview(&self) -> String {
+    fn log_output(&self) -> String {
         telemetry_preview(
             &function_call_output_content_items_to_text(&self.body).unwrap_or_default(),
         )
@@ -254,7 +255,7 @@ impl ApplyPatchToolOutput {
 }
 
 impl ToolOutput for ApplyPatchToolOutput {
-    fn log_preview(&self) -> String {
+    fn log_output(&self) -> String {
         telemetry_preview(&self.text)
     }
 
@@ -287,7 +288,7 @@ pub struct AbortedToolOutput {
 }
 
 impl ToolOutput for AbortedToolOutput {
-    fn log_preview(&self) -> String {
+    fn log_output(&self) -> String {
         telemetry_preview(&self.message)
     }
 
@@ -335,7 +336,7 @@ pub struct ExecCommandToolOutput {
 }
 
 impl ToolOutput for ExecCommandToolOutput {
-    fn log_preview(&self) -> String {
+    fn log_output(&self) -> String {
         telemetry_preview(&self.response_text())
     }
 

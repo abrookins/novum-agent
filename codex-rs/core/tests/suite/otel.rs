@@ -4,6 +4,7 @@ use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
+use codex_protocol::ToolName;
 use codex_protocol::approvals::NetworkPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyRuleAction;
 use codex_protocol::config_types::ServiceTier;
@@ -62,24 +63,27 @@ fn extract_log_field(line: &str, key: &str) -> Option<String> {
     None
 }
 
-fn otel_log_payload(line: &str) -> Option<&str> {
-    line.split_once("codex_otel.log_only: ")
-        .map(|(_, payload)| payload)
-}
+fn assert_empty_mcp_tool_fields(line: &str) -> Result<(), String> {
+    let mcp_server = extract_log_field(line, "mcp_server")
+        .ok_or_else(|| "missing mcp_server field".to_string())?;
+    if !mcp_server.is_empty() {
+        return Err(format!("expected empty mcp_server, got {mcp_server}"));
+    }
 
-fn assert_omitted_mcp_tool_fields(payload: &str) -> Result<(), String> {
-    if extract_log_field(payload, "mcp_server").is_some()
-        || extract_log_field(payload, "mcp_server_origin").is_some()
-    {
-        return Err("tool result exported MCP server fields".to_string());
+    let mcp_server_origin = extract_log_field(line, "mcp_server_origin")
+        .ok_or_else(|| "missing mcp_server_origin field".to_string())?;
+    if !mcp_server_origin.is_empty() {
+        return Err(format!(
+            "expected empty mcp_server_origin, got {mcp_server_origin}"
+        ));
     }
 
     Ok(())
 }
 
-fn shell_command_call(call_id: &str, command: &str) -> serde_json::Value {
-    let args = serde_json::json!({ "command": command }).to_string();
-    ev_function_call(call_id, "shell_command", &args)
+fn exec_command_call(call_id: &str, command: &str) -> serde_json::Value {
+    let args = serde_json::json!({ "cmd": command }).to_string();
+    ev_function_call(call_id, "exec_command", &args)
 }
 
 fn touch_command(path: &str) -> String {
@@ -239,14 +243,10 @@ async fn process_sse_emits_failed_event_on_parse_error() {
     logs_assert(|lines: &[&str]| {
         lines
             .iter()
-            .filter_map(|line| otel_log_payload(line))
-            .find(|payload| {
-                payload.contains("event.name=\"codex.sse_event\"")
-                    && payload.contains("event.kind=other")
-                    && payload.contains("success=false")
-                    && payload.contains("error.type=\"event_decode\"")
-                    && !payload.contains("error.message")
-                    && !payload.contains("expected ident at line 1 column 2")
+            .find(|line| {
+                line.contains("codex.sse_event")
+                    && line.contains("error.message")
+                    && line.contains("expected ident at line 1 column 2")
             })
             .map(|_| Ok(()))
             .unwrap_or(Err("missing codex.sse_event".to_string()))
@@ -284,14 +284,10 @@ async fn process_sse_records_failed_event_when_stream_closes_without_completed()
     logs_assert(|lines: &[&str]| {
         lines
             .iter()
-            .filter_map(|line| otel_log_payload(line))
-            .find(|payload| {
-                payload.contains("event.name=\"codex.sse_event\"")
-                    && payload.contains("event.kind=response.completed")
-                    && payload.contains("success=false")
-                    && payload.contains("error.type=\"response_completed\"")
-                    && !payload.contains("error.message")
-                    && !payload.contains("stream closed before response.completed")
+            .find(|line| {
+                line.contains("codex.sse_event")
+                    && line.contains("error.message")
+                    && line.contains("stream closed before response.completed")
             })
             .map(|_| Ok(()))
             .unwrap_or(Err("missing codex.sse_event".to_string()))
@@ -349,15 +345,11 @@ async fn process_sse_failed_event_records_response_error_message() {
     logs_assert(|lines: &[&str]| {
         lines
             .iter()
-            .filter_map(|line| otel_log_payload(line))
-            .find(|payload| {
-                payload.contains("event.name=\"codex.sse_event\"")
-                    && payload.contains("event.kind=response.failed")
-                    && payload.contains("success=false")
-                    && payload.contains("error.type=\"response_failed\"")
-                    && !payload.contains("error.message")
-                    && !payload.contains("boom")
-                    && !payload.contains("code=bad")
+            .find(|line| {
+                line.contains("codex.sse_event")
+                    && line.contains("event.kind=response.failed")
+                    && line.contains("error.message")
+                    && line.contains("boom")
             })
             .map(|_| Ok(()))
             .unwrap_or(Err("missing codex.sse_event".to_string()))
@@ -513,14 +505,11 @@ async fn process_sse_failed_event_logs_response_completed_parse_error() {
     logs_assert(|lines: &[&str]| {
         lines
             .iter()
-            .filter_map(|line| otel_log_payload(line))
-            .find(|payload| {
-                payload.contains("event.name=\"codex.sse_event\"")
-                    && payload.contains("event.kind=response.completed")
-                    && payload.contains("success=false")
-                    && payload.contains("error.type=\"response_completed\"")
-                    && !payload.contains("error.message")
-                    && !payload.contains("failed to parse ResponseCompleted")
+            .find(|line| {
+                line.contains("codex.sse_event")
+                    && line.contains("event.kind=response.completed")
+                    && line.contains("error.message")
+                    && line.contains("failed to parse ResponseCompleted")
             })
             .map(|_| Ok(()))
             .unwrap_or(Err("missing codex.sse_event".to_string()))
@@ -904,33 +893,26 @@ async fn handle_response_item_records_tool_result_for_custom_tool_call() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     logs_assert(|lines: &[&str]| {
-        let payload = lines
+        let line = lines
             .iter()
-            .filter_map(|line| otel_log_payload(line))
-            .find(|payload| {
-                payload.contains("event.name=\"codex.tool_result\"")
-                    && payload.contains("tool_name=custom")
+            .find(|line| {
+                line.contains("codex.tool_result") && line.contains("call_id=custom-tool-call")
             })
             .ok_or_else(|| "missing codex.tool_result event".to_string())?;
 
-        if !payload.contains("arguments_length=") {
-            return Err("missing arguments_length field".to_string());
+        if !line.contains("tool_name=unsupported_tool") {
+            return Err("missing tool_name field".to_string());
         }
-        if !payload.contains("output_length=") {
-            return Err("missing output_length field".to_string());
+        if !line.contains("arguments={\"key\":\"value\"}") {
+            return Err("missing arguments field".to_string());
         }
-        if !payload.contains("success=false") {
+        if !line.contains("output=unsupported custom tool call: unsupported_tool") {
+            return Err("missing output field".to_string());
+        }
+        if !line.contains("success=false") {
             return Err("missing success field".to_string());
         }
-        if payload.contains("call_id=")
-            || payload.contains("custom-tool-call")
-            || payload.contains("unsupported_tool")
-            || payload.contains("arguments=")
-            || payload.contains("output=")
-        {
-            return Err("tool result leaked direct or content fields".to_string());
-        }
-        assert_omitted_mcp_tool_fields(payload)?;
+        assert_empty_mcp_tool_fields(line)?;
 
         Ok(())
     });
@@ -981,33 +963,26 @@ async fn handle_response_item_records_tool_result_for_function_call() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TokenCount(_))).await;
 
     logs_assert(|lines: &[&str]| {
-        let payload = lines
+        let line = lines
             .iter()
-            .filter_map(|line| otel_log_payload(line))
-            .find(|payload| {
-                payload.contains("event.name=\"codex.tool_result\"")
-                    && payload.contains("tool_name=custom")
+            .find(|line| {
+                line.contains("codex.tool_result") && line.contains("call_id=function-call")
             })
             .ok_or_else(|| "missing codex.tool_result event".to_string())?;
 
-        if !payload.contains("arguments_length=") {
-            return Err("missing arguments_length field".to_string());
+        if !line.contains("tool_name=nonexistent") {
+            return Err("missing tool_name field".to_string());
         }
-        if !payload.contains("output_length=") {
-            return Err("missing output_length field".to_string());
+        if !line.contains("arguments={\"value\":1}") {
+            return Err("missing arguments field".to_string());
         }
-        if !payload.contains("success=false") {
+        if !line.contains("output=unsupported call: nonexistent") {
+            return Err("missing output field".to_string());
+        }
+        if !line.contains("success=false") {
             return Err("missing success field".to_string());
         }
-        if payload.contains("call_id=")
-            || payload.contains("function-call")
-            || payload.contains("nonexistent")
-            || payload.contains("arguments=")
-            || payload.contains("output=")
-        {
-            return Err("tool result leaked direct or content fields".to_string());
-        }
-        assert_omitted_mcp_tool_fields(payload)?;
+        assert_empty_mcp_tool_fields(line)?;
 
         Ok(())
     });
@@ -1015,13 +990,13 @@ async fn handle_response_item_records_tool_result_for_function_call() {
 
 #[tokio::test]
 #[traced_test]
-async fn handle_response_item_records_tool_result_for_shell_command_call() {
+async fn handle_response_item_records_tool_result_for_exec_command_call() {
     let server = start_mock_server().await;
 
     mount_sse_once(
         &server,
         sse(vec![
-            shell_command_call("shell-call", "echo shell"),
+            exec_command_call("shell-call", "echo shell"),
             ev_completed("done"),
         ]),
     )
@@ -1059,32 +1034,27 @@ async fn handle_response_item_records_tool_result_for_shell_command_call() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     logs_assert(|lines: &[&str]| {
-        let payload = lines
+        let line = lines
             .iter()
-            .filter_map(|line| otel_log_payload(line))
-            .find(|payload| {
-                payload.contains("event.name=\"codex.tool_result\"")
-                    && payload.contains("tool_name=shell")
-            })
+            .find(|line| line.contains("codex.tool_result") && line.contains("call_id=shell-call"))
             .ok_or_else(|| "missing codex.tool_result event".to_string())?;
 
-        if !payload.contains("arguments_length=") {
-            return Err("missing arguments_length field".to_string());
+        if !line.contains("tool_name=exec_command") {
+            return Err("missing tool_name field".to_string());
         }
-        if !payload.contains("output_length=") {
-            return Err("missing output_length field".to_string());
+        if !line.contains("arguments={\"cmd\":\"echo shell\"}") {
+            return Err("missing arguments field".to_string());
         }
-        if !payload.contains("success=false") {
+        let output_idx = line
+            .find("output=")
+            .ok_or_else(|| "missing output field".to_string())?;
+        if line[output_idx + "output=".len()..].is_empty() {
+            return Err("empty output field".to_string());
+        }
+        if !line.contains("success=false") {
             return Err("missing success field".to_string());
         }
-        if payload.contains("call_id=")
-            || payload.contains("shell-call")
-            || payload.contains("arguments=")
-            || payload.contains("output=")
-        {
-            return Err("tool result leaked direct or content fields".to_string());
-        }
-        assert_omitted_mcp_tool_fields(payload)?;
+        assert_empty_mcp_tool_fields(line)?;
 
         Ok(())
     });
@@ -1100,29 +1070,25 @@ fn tool_decision_assertion<'a>(
     let expected_source = expected_source.to_string();
 
     move |lines: &[&str]| {
-        let payload = lines
+        let line = lines
             .iter()
-            .filter_map(|line| otel_log_payload(line))
-            .find(|payload| {
-                let lower = payload.to_lowercase();
-                lower.contains("codex.tool_decision")
-                    && lower.contains(&format!("decision={expected_decision}"))
-                    && lower.contains(&format!("source={expected_source}"))
+            .find(|line| {
+                line.contains("codex.tool_decision") && line.contains(&format!("call_id={call_id}"))
             })
             .ok_or_else(|| format!("missing codex.tool_decision event for {call_id}"))?;
 
-        let lower = payload.to_lowercase();
-        if !lower.contains("tool_name=shell") {
-            return Err("missing shell tool category".to_string());
+        let lower = line.to_lowercase();
+        if !lower.contains("tool_name=exec_command") {
+            return Err("missing tool_name for exec_command".to_string());
+        }
+        if !lower.contains("tool_namespace=functions") {
+            return Err("missing default tool namespace".to_string());
         }
         if !lower.contains(&format!("decision={expected_decision}")) {
             return Err(format!("unexpected decision for {call_id}"));
         }
         if !lower.contains(&format!("source={expected_source}")) {
             return Err(format!("unexpected source for {expected_source}"));
-        }
-        if payload.contains("call_id=") || payload.contains(&call_id) {
-            return Err(format!("tool decision leaked call ID {call_id}"));
         }
 
         Ok(())
@@ -1137,20 +1103,17 @@ fn sandbox_outcome_assertion<'a>(
     let expected_outcome = expected_outcome.to_string();
 
     move |lines: &[&str]| {
-        let payload = lines
+        let line = lines
             .iter()
-            .filter_map(|line| otel_log_payload(line))
-            .find(|payload| {
-                payload.contains("codex.sandbox_outcome")
-                    && payload
-                        .to_lowercase()
-                        .contains(&format!("outcome={expected_outcome}"))
+            .find(|line| {
+                line.contains("codex.sandbox_outcome")
+                    && line.contains(&format!("call_id={call_id}"))
             })
             .ok_or_else(|| format!("missing codex.sandbox_outcome event for {call_id}"))?;
 
-        let lower = payload.to_lowercase();
-        if !lower.contains("tool_name=shell") {
-            return Err("missing shell tool category".to_string());
+        let lower = line.to_lowercase();
+        if !lower.contains("tool_name=exec_command") {
+            return Err("missing tool_name for exec_command".to_string());
         }
         if !lower.contains(&format!("outcome={expected_outcome}")) {
             return Err(format!("unexpected sandbox outcome for {call_id}"));
@@ -1160,9 +1123,6 @@ fn sandbox_outcome_assertion<'a>(
         }
         if !lower.contains("escalated_duration_ms=34") {
             return Err("missing escalated_duration_ms field".to_string());
-        }
-        if payload.contains("call_id=") || payload.contains(&call_id) {
-            return Err(format!("sandbox outcome leaked call ID {call_id}"));
         }
 
         Ok(())
@@ -1198,7 +1158,7 @@ fn network_policy_decisions_omit_source_and_destination() {
         ),
     ] {
         telemetry.tool_decision(
-            "exec_command",
+            &ToolName::namespaced("mcp__example", "exec_command"),
             call_id,
             &ReviewDecision::NetworkPolicyAmendment {
                 network_policy_amendment: NetworkPolicyAmendment {
@@ -1214,12 +1174,15 @@ fn network_policy_decisions_omit_source_and_destination() {
                 .iter()
                 .find(|line| {
                     line.contains("codex.tool_decision")
-                        && line.contains(&format!("decision={expected_decision}"))
+                        && line.contains(&format!("call_id={call_id}"))
                 })
-                .ok_or_else(|| format!("missing network tool decision for {expected_decision}"))?;
+                .ok_or_else(|| format!("missing network tool decision for {call_id}"))?;
 
-            if !line.contains("tool_name=shell") {
-                return Err("missing anonymized network tool category".to_string());
+            if !line.contains("tool_name=exec_command") {
+                return Err("missing triggering network tool name".to_string());
+            }
+            if !line.contains("tool_namespace=mcp__example") {
+                return Err("missing triggering network tool namespace".to_string());
             }
             if !line.contains(&format!("decision={expected_decision}")) {
                 return Err(format!("unexpected network tool decision for {call_id}"));
@@ -1253,7 +1216,7 @@ fn sandbox_outcome_event_records_outcome() {
     );
 
     telemetry.sandbox_outcome(
-        "shell_command",
+        "exec_command",
         "sandbox-outcome-call",
         "escalated",
         Duration::from_millis(/*millis*/ 12),
@@ -1268,12 +1231,12 @@ fn sandbox_outcome_event_records_outcome() {
 
 #[tokio::test]
 #[traced_test]
-async fn handle_shell_command_autoapprove_from_config_records_tool_decision() {
+async fn handle_exec_command_autoapprove_from_config_records_tool_decision() {
     let server = start_mock_server().await;
     mount_sse_once(
         &server,
         sse(vec![
-            shell_command_call("auto_config_call", "echo local shell"),
+            exec_command_call("auto_config_call", "echo local shell"),
             ev_completed("done"),
         ]),
     )
@@ -1319,13 +1282,13 @@ async fn handle_shell_command_autoapprove_from_config_records_tool_decision() {
 
 #[tokio::test]
 #[traced_test]
-async fn handle_shell_command_user_approved_records_tool_decision() {
+async fn handle_exec_command_user_approved_records_tool_decision() {
     let server = start_mock_server().await;
     let command = touch_command("codex-otel-approval-test");
     mount_sse_once(
         &server,
         sse(vec![
-            shell_command_call("user_approved_call", &command),
+            exec_command_call("user_approved_call", &command),
             ev_completed("done"),
         ]),
     )
@@ -1383,14 +1346,14 @@ async fn handle_shell_command_user_approved_records_tool_decision() {
 
 #[tokio::test]
 #[traced_test]
-async fn handle_shell_command_user_approved_for_session_records_tool_decision() {
+async fn handle_exec_command_user_approved_for_session_records_tool_decision() {
     let server = start_mock_server().await;
     let command = touch_command("codex-otel-approval-test");
 
     mount_sse_once(
         &server,
         sse(vec![
-            shell_command_call("user_approved_session_call", &command),
+            exec_command_call("user_approved_session_call", &command),
             ev_completed("done"),
         ]),
     )
@@ -1454,7 +1417,7 @@ async fn handle_sandbox_error_user_approves_retry_records_tool_decision() {
     mount_sse_once(
         &server,
         sse(vec![
-            shell_command_call("sandbox_retry_call", &command),
+            exec_command_call("sandbox_retry_call", &command),
             ev_completed("done"),
         ]),
     )
@@ -1511,14 +1474,14 @@ async fn handle_sandbox_error_user_approves_retry_records_tool_decision() {
 
 #[tokio::test]
 #[traced_test]
-async fn handle_shell_command_user_denies_records_tool_decision() {
+async fn handle_exec_command_user_denies_records_tool_decision() {
     let server = start_mock_server().await;
     let command = touch_command("codex-otel-approval-test");
 
     mount_sse_once(
         &server,
         sse(vec![
-            shell_command_call("user_denied_call", &command),
+            exec_command_call("user_denied_call", &command),
             ev_completed("done"),
         ]),
     )
@@ -1582,7 +1545,7 @@ async fn handle_sandbox_error_user_approves_for_session_records_tool_decision() 
     mount_sse_once(
         &server,
         sse(vec![
-            shell_command_call("sandbox_session_call", &command),
+            exec_command_call("sandbox_session_call", &command),
             ev_completed("done"),
         ]),
     )
@@ -1646,7 +1609,7 @@ async fn handle_sandbox_error_user_denies_records_tool_decision() {
     mount_sse_once(
         &server,
         sse(vec![
-            shell_command_call("sandbox_deny_call", &command),
+            exec_command_call("sandbox_deny_call", &command),
             ev_completed("done"),
         ]),
     )

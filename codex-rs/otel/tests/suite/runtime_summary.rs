@@ -6,6 +6,7 @@ use codex_otel::RuntimeMetricsSummary;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
+use codex_protocol::ToolName;
 use codex_protocol::protocol::SessionSource;
 use eventsource_stream::Event as StreamEvent;
 use opentelemetry_sdk::metrics::InMemoryMetricExporter;
@@ -37,7 +38,7 @@ fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<(
     manager.reset_runtime_metrics();
 
     manager.tool_result_with_tags(
-        "shell",
+        &ToolName::plain("shell"),
         "call-1",
         "{\"cmd\":\"echo\"}",
         Duration::from_millis(250),
@@ -49,7 +50,7 @@ fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<(
     manager.record_api_request(
         /*attempt*/ 1,
         Some(200),
-        /*error_type*/ None,
+        /*error*/ None,
         Duration::from_millis(300),
         /*auth_header_attached*/ false,
         /*auth_header_name*/ None,
@@ -57,13 +58,17 @@ fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<(
         /*recovery_mode*/ None,
         /*recovery_phase*/ None,
         "/responses",
+        /*request_id*/ None,
+        /*cf_ray*/ None,
         /*auth_error*/ None,
         /*auth_error_code*/ None,
+        /*agent_identity_telemetry*/ None,
     );
     manager.record_websocket_request(
         Duration::from_millis(400),
-        /*error_type*/ None,
+        /*error*/ None,
         /*connection_reused*/ false,
+        /*agent_identity_telemetry*/ None,
     );
     let sse_response: std::result::Result<
         Option<std::result::Result<StreamEvent, eventsource_stream::EventStreamError<&str>>>,

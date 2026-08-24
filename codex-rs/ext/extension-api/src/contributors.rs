@@ -25,6 +25,8 @@ mod world_state;
 pub use context::TurnContextContributionInput;
 pub use mcp::McpServerContribution;
 pub use mcp::McpServerContributionContext;
+pub use mcp::SelectedPluginIdentity;
+pub use mcp::SelectedPluginSnapshot;
 pub use prompt::PromptFragment;
 pub use prompt::PromptSlot;
 pub use skill_invocation::SkillInvocationInput;
@@ -32,11 +34,11 @@ pub use skill_invocation::SkillInvocationKind;
 pub use thread_lifecycle::ThreadIdleCause;
 pub use thread_lifecycle::ThreadIdleInput;
 pub use thread_lifecycle::ThreadOriginator;
+pub use thread_lifecycle::ThreadReadyInput;
 pub use thread_lifecycle::ThreadResumeInput;
 pub use thread_lifecycle::ThreadStartInput;
 pub use thread_lifecycle::ThreadStopInput;
 pub use tool_lifecycle::ToolCallOutcome;
-pub use tool_lifecycle::ToolCallSource;
 pub use tool_lifecycle::ToolFinishInput;
 pub use tool_lifecycle::ToolLifecycleFuture;
 pub use tool_lifecycle::ToolStartInput;
@@ -125,6 +127,14 @@ pub trait ContextContributor: Send + Sync {
 pub trait ThreadLifecycleContributor<C: Sync>: Send + Sync {
     /// Called after host startup has initialized the thread-scoped store.
     fn on_thread_start<'a>(&'a self, input: ThreadStartInput<'a, C>) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            let _self = self;
+            let _input = input;
+        })
+    }
+
+    /// Called after the initialized thread is registered with its host.
+    fn on_thread_ready<'a>(&'a self, input: ThreadReadyInput<'a, C>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
             let _self = self;
             let _input = input;
@@ -318,11 +328,13 @@ pub trait ToolLifecycleContributor: Send + Sync {
 
 /// Extension contribution that can claim rendered approval-review prompts.
 pub trait ApprovalReviewContributor: Send + Sync {
+    /// Reviews one action using metrics bound to the active turn's model.
     fn contribute<'a>(
         &'a self,
         session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
         prompt: &'a str,
+        extension_metrics: Option<Arc<dyn ExtensionMetrics>>,
     ) -> ExtensionFuture<'a, Option<ReviewDecision>>;
 }
 

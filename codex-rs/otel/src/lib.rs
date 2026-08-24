@@ -6,6 +6,7 @@ pub(crate) mod trace_context;
 
 mod otlp;
 mod targets;
+mod tool_result;
 mod trace_sanitizer;
 
 #[cfg(test)]

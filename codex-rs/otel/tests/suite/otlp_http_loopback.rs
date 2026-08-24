@@ -148,7 +148,7 @@ fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
     let (tx, rx) = mpsc::channel::<Vec<CapturedRequest>>();
     let server = thread::spawn(move || {
         let mut captured = Vec::new();
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(3);
 
         while Instant::now() < deadline {
             match listener.accept() {
@@ -161,7 +161,6 @@ fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
                             content_type: headers.get("content-type").cloned(),
                             body,
                         });
-                        break;
                     }
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
@@ -248,22 +247,22 @@ fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
     assert!(
         body.contains("codex.turns"),
         "expected metric name not found; body prefix: {}",
-        body.chars().take(2000).collect::<String>()
+        &body.chars().take(2000).collect::<String>()
     );
     assert!(
         body.contains("codex.active"),
         "expected gauge not found; body prefix: {}",
-        body.chars().take(2000).collect::<String>()
+        &body.chars().take(2000).collect::<String>()
     );
     assert!(
         body.contains("\"codex.api_request\""),
         "expected API-request counter not found; body prefix: {}",
-        body.chars().take(2000).collect::<String>()
+        &body.chars().take(2000).collect::<String>()
     );
     assert!(
         body.contains("\"codex.api_request.duration_ms\""),
         "expected API-request duration not found; body prefix: {}",
-        body.chars().take(2000).collect::<String>()
+        &body.chars().take(2000).collect::<String>()
     );
     assert!(
         body.contains("\"codex.conversation.turn.count\""),
@@ -288,7 +287,7 @@ fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
     assert!(
         body.contains("\"codex.tool.call\""),
         "expected tool-call counter not found; body prefix: {}",
-        body.chars().take(2000).collect::<String>()
+        &body.chars().take(2000).collect::<String>()
     );
     assert!(
         body.contains("\"codex.turn.token_usage\""),
@@ -298,12 +297,12 @@ fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
     assert!(
         body.contains("\"codex.tool.call.duration_ms\""),
         "expected tool-call duration not found; body prefix: {}",
-        body.chars().take(2000).collect::<String>()
+        &body.chars().take(2000).collect::<String>()
     );
     assert!(
         body.contains("component") && body.contains("test"),
         "expected gauge tag not found; body prefix: {}",
-        body.chars().take(2000).collect::<String>()
+        &body.chars().take(2000).collect::<String>()
     );
 
     Ok(())
@@ -319,7 +318,7 @@ fn otlp_http_exporter_sends_logs_to_collector()
     let (tx, rx) = mpsc::channel::<Vec<CapturedRequest>>();
     let server = thread::spawn(move || {
         let mut captured = Vec::new();
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(3);
 
         while Instant::now() < deadline {
             match listener.accept() {
@@ -332,7 +331,6 @@ fn otlp_http_exporter_sends_logs_to_collector()
                             content_type: headers.get("content-type").cloned(),
                             body,
                         });
-                        break;
                     }
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
@@ -345,7 +343,7 @@ fn otlp_http_exporter_sends_logs_to_collector()
         let _ = tx.send(captured);
     });
 
-    let otel = OtelProvider::from(&OtelSettings {
+    let otel = OtelProvider::try_new(&OtelSettings {
         environment: "test".to_string(),
         service_name: "codex-cli".to_string(),
         service_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -397,14 +395,14 @@ fn otlp_http_exporter_sends_logs_to_collector()
     assert!(
         body.contains("codex.test.log_exported"),
         "expected exported log event not found; body prefix: {}",
-        body.chars().take(2000).collect::<String>()
+        &body.chars().take(2000).collect::<String>()
     );
     Ok(())
 }
 
 #[test]
 fn otel_provider_rejects_header_unsafe_configured_tracestate() {
-    let result = OtelProvider::from(&OtelSettings {
+    let result = OtelProvider::try_new(&OtelSettings {
         environment: "test".to_string(),
         service_name: "codex-cli".to_string(),
         service_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -444,7 +442,7 @@ fn otlp_http_exporter_sends_traces_to_collector()
     let (tx, rx) = mpsc::channel::<Vec<CapturedRequest>>();
     let server = thread::spawn(move || {
         let mut captured = Vec::new();
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(3);
 
         while Instant::now() < deadline {
             match listener.accept() {
@@ -457,7 +455,6 @@ fn otlp_http_exporter_sends_traces_to_collector()
                             content_type: headers.get("content-type").cloned(),
                             body,
                         });
-                        break;
                     }
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
@@ -470,10 +467,10 @@ fn otlp_http_exporter_sends_traces_to_collector()
         let _ = tx.send(captured);
     });
 
-    let otel = OtelProvider::from(&OtelSettings {
-        environment: "canary-private-environment".to_string(),
-        service_name: "canary-private-service".to_string(),
-        service_version: "canary-private-version".to_string(),
+    let otel = OtelProvider::try_new(&OtelSettings {
+        environment: "test".to_string(),
+        service_name: "codex-cli".to_string(),
+        service_version: env!("CARGO_PKG_VERSION").to_string(),
         codex_home: PathBuf::from("."),
         exporter: OtelExporter::None,
         trace_exporter: OtelExporter::OtlpHttp {
@@ -485,8 +482,8 @@ fn otlp_http_exporter_sends_traces_to_collector()
         metrics_exporter: OtelExporter::None,
         runtime_metrics: false,
         span_attributes: BTreeMap::from([(
-            "canary.configured_attribute".to_string(),
-            "canary-configured-value".to_string(),
+            "test.configured_attribute".to_string(),
+            "configured-value".to_string(),
         )]),
         tracestate: BTreeMap::from([(
             "example".to_string(),
@@ -503,18 +500,10 @@ fn otlp_http_exporter_sends_traces_to_collector()
     let propagated_trace = tracing::subscriber::with_default(subscriber, || {
         let span = tracing::info_span!(
             "trace-loopback",
-            otel.name = "canary-private-span-name",
+            otel.name = "trace-loopback",
             otel.kind = "server",
-            otel.status_code = "ERROR",
-            otel.status_message = "canary private status description",
             rpc.system = "jsonrpc",
             rpc.method = "trace-loopback",
-            cwd = "/canary/private/cwd",
-            mcp.server.name = "canary-private-server",
-            skill.name = "canary-private-skill",
-            tool.name = "canary-private-mcp-tool",
-            connector.id = "canary-private-connector",
-            call.id = "canary-private-identifier",
         );
         assert!(set_parent_from_w3c_trace_context(
             &span,
@@ -531,16 +520,8 @@ fn otlp_http_exporter_sends_traces_to_collector()
         tracing::event!(
             target: "codex_otel.trace_safe",
             tracing::Level::INFO,
-            event.name = "codex.tool_result",
-            tool_name = "mcp",
-            success = true,
-            duration_ms = 42_i64,
-            arguments_length = 24_i64,
-            output_length = 21_i64,
-            output_line_count = 1_i64,
-            arguments = "canary private arguments",
-            output = "canary private output",
-            error.message = "canary private error",
+            event.name = "codex.test.trace_event",
+            "test OTEL trace event"
         );
         tracing::info!("trace loopback event");
         propagated_trace
@@ -572,44 +553,23 @@ fn otlp_http_exporter_sends_traces_to_collector()
     assert!(
         body.contains("codex.operation"),
         "expected span name not found; body prefix: {}",
-        body.chars().take(2000).collect::<String>()
+        &body.chars().take(2000).collect::<String>()
     );
     assert!(
-        body.contains("service.name") && body.contains("other"),
+        body.contains("\"service.name\"") && body.contains("\"stringValue\": \"other\""),
         "expected service name not found; body prefix: {}",
-        body.chars().take(2000).collect::<String>()
+        &body.chars().take(2000).collect::<String>()
     );
     assert!(
-        body.contains("codex.tool_result")
-            && body.contains("arguments_length")
-            && body.contains("output_length"),
-        "expected trace event not found; body prefix: {}",
-        body.chars().take(2000).collect::<String>()
+        !body.contains("test.configured_attribute") && !body.contains("configured-value"),
+        "configured span attribute leaked; body prefix: {}",
+        &body.chars().take(2000).collect::<String>()
     );
-    for canary in [
-        "canary-private-environment",
-        "canary-private-service",
-        "canary-private-version",
-        "canary.configured_attribute",
-        "canary-configured-value",
-        "canary-private-span-name",
-        "canary private status description",
-        "/canary/private/cwd",
-        "canary-private-server",
-        "canary-private-skill",
-        "canary-private-mcp-tool",
-        "canary-private-connector",
-        "canary-private-identifier",
-        "canary private arguments",
-        "canary private output",
-        "canary private error",
-    ] {
-        assert!(
-            !body.contains(canary),
-            "trace export leaked {canary:?}; body prefix: {}",
-            body.chars().take(2000).collect::<String>()
-        );
-    }
+    assert!(
+        !body.contains("codex.test.trace_event"),
+        "trace event leaked; body prefix: {}",
+        &body.chars().take(2000).collect::<String>()
+    );
 
     Ok(())
 }
@@ -627,7 +587,7 @@ async fn otlp_http_exporter_sends_traces_to_collector_with_bounded_shutdown_in_t
     let (tx, rx) = mpsc::channel::<Vec<CapturedRequest>>();
     let server = thread::spawn(move || {
         let mut captured = Vec::new();
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(3);
 
         while Instant::now() < deadline {
             match listener.accept() {
@@ -640,7 +600,6 @@ async fn otlp_http_exporter_sends_traces_to_collector_with_bounded_shutdown_in_t
                             content_type: headers.get("content-type").cloned(),
                             body,
                         });
-                        break;
                     }
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
@@ -653,7 +612,7 @@ async fn otlp_http_exporter_sends_traces_to_collector_with_bounded_shutdown_in_t
         let _ = tx.send(captured);
     });
 
-    let otel = OtelProvider::from(&OtelSettings {
+    let otel = OtelProvider::try_new(&OtelSettings {
         environment: "test".to_string(),
         service_name: "codex-cli".to_string(),
         service_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -710,12 +669,12 @@ async fn otlp_http_exporter_sends_traces_to_collector_with_bounded_shutdown_in_t
     assert!(
         body.contains("codex.operation"),
         "expected span name not found; body prefix: {}",
-        body.chars().take(2000).collect::<String>()
+        &body.chars().take(2000).collect::<String>()
     );
     assert!(
-        body.contains("service.name") && body.contains("other"),
+        body.contains("\"service.name\"") && body.contains("\"stringValue\": \"other\""),
         "expected service name not found; body prefix: {}",
-        body.chars().take(2000).collect::<String>()
+        &body.chars().take(2000).collect::<String>()
     );
 
     Ok(())
@@ -746,7 +705,7 @@ fn otlp_http_exporter_times_out_when_collector_stalls_during_bounded_shutdown() 
         .build()
         .expect("build tokio runtime");
     let (result, elapsed) = runtime.block_on(async move {
-        let otel = OtelProvider::from(&OtelSettings {
+        let otel = OtelProvider::try_new(&OtelSettings {
             environment: "test".to_string(),
             service_name: "codex-cli".to_string(),
             service_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -812,7 +771,7 @@ fn otlp_http_exporter_sends_traces_to_collector_in_current_thread_tokio_runtime(
     let (tx, rx) = mpsc::channel::<Vec<CapturedRequest>>();
     let server = thread::spawn(move || {
         let mut captured = Vec::new();
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(3);
 
         while Instant::now() < deadline {
             match listener.accept() {
@@ -825,7 +784,6 @@ fn otlp_http_exporter_sends_traces_to_collector_in_current_thread_tokio_runtime(
                             content_type: headers.get("content-type").cloned(),
                             body,
                         });
-                        break;
                     }
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
@@ -846,7 +804,7 @@ fn otlp_http_exporter_sends_traces_to_collector_in_current_thread_tokio_runtime(
             .expect("current-thread runtime");
 
         let result = runtime.block_on(async move {
-            let otel = OtelProvider::from(&OtelSettings {
+            let otel = OtelProvider::try_new(&OtelSettings {
                 environment: "test".to_string(),
                 service_name: "codex-cli".to_string(),
                 service_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -911,12 +869,12 @@ fn otlp_http_exporter_sends_traces_to_collector_in_current_thread_tokio_runtime(
     assert!(
         body.contains("codex.operation"),
         "expected span name not found; body prefix: {}",
-        body.chars().take(2000).collect::<String>()
+        &body.chars().take(2000).collect::<String>()
     );
     assert!(
-        body.contains("service.name") && body.contains("other"),
+        body.contains("\"service.name\"") && body.contains("\"stringValue\": \"other\""),
         "expected service name not found; body prefix: {}",
-        body.chars().take(2000).collect::<String>()
+        &body.chars().take(2000).collect::<String>()
     );
 
     Ok(())

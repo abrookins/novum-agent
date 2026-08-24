@@ -24,7 +24,8 @@ pub struct RecoverableToolOutput {
 
 /// Model-facing output contract returned by executable tool runtimes.
 pub trait ToolOutput: Send {
-    fn log_preview(&self) -> String;
+    /// Returns a deliberately lossy diagnostic representation suitable for telemetry.
+    fn log_output(&self) -> String;
 
     fn success_for_logging(&self) -> bool;
 
@@ -133,8 +134,8 @@ impl<T> ToolOutput for Box<T>
 where
     T: ToolOutput + ?Sized,
 {
-    fn log_preview(&self) -> String {
-        (**self).log_preview()
+    fn log_output(&self) -> String {
+        (**self).log_output()
     }
 
     fn success_for_logging(&self) -> bool {
@@ -239,7 +240,7 @@ impl JsonToolOutput {
 }
 
 impl ToolOutput for JsonToolOutput {
-    fn log_preview(&self) -> String {
+    fn log_output(&self) -> String {
         telemetry_preview(&self.value.to_string())
     }
 
@@ -281,7 +282,7 @@ impl ToolOutput for JsonToolOutput {
 }
 
 impl ToolOutput for codex_protocol::mcp::CallToolResult {
-    fn log_preview(&self) -> String {
+    fn log_output(&self) -> String {
         let output = self.as_function_call_output_payload();
         let preview = output.body.to_text().unwrap_or_else(|| output.to_string());
         telemetry_preview(&preview)

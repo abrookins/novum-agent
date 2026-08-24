@@ -8,14 +8,6 @@ const CF_RAY_HEADER: &str = "cf-ray";
 const AUTH_ERROR_HEADER: &str = "x-openai-authorization-error";
 const X_ERROR_JSON_HEADER: &str = "x-error-json";
 
-fn bucket_auth_error_code(code: &str) -> &'static str {
-    match code {
-        "token_expired" => "token_expired",
-        "refresh_token_expired" => "refresh_token_expired",
-        _ => "other",
-    }
-}
-
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ResponseDebugContext {
     pub request_id: Option<String>,
@@ -27,7 +19,10 @@ pub struct ResponseDebugContext {
 pub fn extract_response_debug_context(transport: &TransportError) -> ResponseDebugContext {
     let mut context = ResponseDebugContext::default();
 
-    let TransportError::Http { headers, .. } = transport else {
+    let TransportError::Http {
+        headers, body: _, ..
+    } = transport
+    else {
         return context;
     };
 
@@ -52,7 +47,6 @@ pub fn extract_response_debug_context(transport: &TransportError) -> ResponseDeb
             .get("error")
             .and_then(|error| error.get("code"))
             .and_then(serde_json::Value::as_str)
-            .map(bucket_auth_error_code)
             .map(str::to_string)
     });
 
@@ -66,31 +60,31 @@ pub fn extract_response_debug_context_from_api_error(error: &ApiError) -> Respon
     }
 }
 
-pub fn telemetry_transport_error_type(error: &TransportError) -> &'static str {
+pub fn telemetry_transport_error_message(error: &TransportError) -> String {
     match error {
-        TransportError::Http { .. } => "http",
-        TransportError::RetryLimit => "retry_limit",
-        TransportError::Timeout => "timeout",
-        TransportError::Connection(_) => "connection",
-        TransportError::Network(_) => "network",
-        TransportError::Build(_) => "build",
+        TransportError::Http { status, .. } => format!("http {}", status.as_u16()),
+        TransportError::RetryLimit => "retry limit reached".to_string(),
+        TransportError::Timeout => "timeout".to_string(),
+        TransportError::Connection(err) => err.to_string(),
+        TransportError::Network(err) => err.to_string(),
+        TransportError::Build(err) => err.to_string(),
     }
 }
 
-pub fn telemetry_api_error_type(error: &ApiError) -> &'static str {
+pub fn telemetry_api_error_message(error: &ApiError) -> String {
     match error {
-        ApiError::Transport(transport) => telemetry_transport_error_type(transport),
-        ApiError::Api { .. } => "api",
-        ApiError::Stream(_) => "stream",
-        ApiError::ContextWindowExceeded => "context_window_exceeded",
-        ApiError::QuotaExceeded => "quota_exceeded",
-        ApiError::UsageNotIncluded => "usage_not_included",
-        ApiError::Retryable { .. } => "retryable",
-        ApiError::RateLimit(_) => "rate_limit",
-        ApiError::InvalidRequest { .. } => "invalid_request",
-        ApiError::CyberPolicy { .. } => "cyber_policy",
-        ApiError::MisalignmentPolicyViolation { .. } => "misalignment_policy_violation",
-        ApiError::ServerOverloaded => "server_overloaded",
+        ApiError::Transport(transport) => telemetry_transport_error_message(transport),
+        ApiError::Api { status, .. } => format!("api error {}", status.as_u16()),
+        ApiError::Stream(err) => err.to_string(),
+        ApiError::ContextWindowExceeded => "context window exceeded".to_string(),
+        ApiError::QuotaExceeded => "quota exceeded".to_string(),
+        ApiError::UsageNotIncluded => "usage not included".to_string(),
+        ApiError::Retryable { .. } => "retryable error".to_string(),
+        ApiError::RateLimit(_) => "rate limit".to_string(),
+        ApiError::InvalidRequest { .. } => "invalid request".to_string(),
+        ApiError::CyberPolicy { .. } => "cyber policy".to_string(),
+        ApiError::MisalignmentPolicyViolation { .. } => "misalignment policy violation".to_string(),
+        ApiError::ServerOverloaded => "server overloaded".to_string(),
     }
 }
 
@@ -98,8 +92,8 @@ pub fn telemetry_api_error_type(error: &ApiError) -> &'static str {
 mod tests {
     use super::ResponseDebugContext;
     use super::extract_response_debug_context;
-    use super::telemetry_api_error_type;
-    use super::telemetry_transport_error_type;
+    use super::telemetry_api_error_message;
+    use super::telemetry_transport_error_message;
     use codex_api::ApiError;
     use codex_api::TransportError;
     use http::HeaderMap;
@@ -140,7 +134,7 @@ mod tests {
     }
 
     #[test]
-    fn telemetry_error_types_omit_http_bodies() {
+    fn telemetry_error_messages_omit_http_bodies() {
         let transport = TransportError::Http {
             status: StatusCode::UNAUTHORIZED,
             url: Some("https://chatgpt.com/backend-api/codex/responses".to_string()),
@@ -148,21 +142,27 @@ mod tests {
             body: Some(r#"{"error":{"message":"secret token leaked"}}"#.to_string()),
         };
 
-        assert_eq!(telemetry_transport_error_type(&transport), "http");
+        assert_eq!(telemetry_transport_error_message(&transport), "http 401");
         assert_eq!(
-            telemetry_api_error_type(&ApiError::Transport(transport)),
-            "http"
+            telemetry_api_error_message(&ApiError::Transport(transport)),
+            "http 401"
         );
     }
 
     #[test]
-    fn telemetry_error_types_bucket_non_http_details() {
+    fn telemetry_error_messages_preserve_non_http_details() {
         let network = TransportError::Network("dns lookup failed".to_string());
         let build = TransportError::Build("invalid header value".to_string());
         let stream = ApiError::Stream("socket closed".to_string());
 
-        assert_eq!(telemetry_transport_error_type(&network), "network");
-        assert_eq!(telemetry_transport_error_type(&build), "build");
-        assert_eq!(telemetry_api_error_type(&stream), "stream");
+        assert_eq!(
+            telemetry_transport_error_message(&network),
+            "dns lookup failed"
+        );
+        assert_eq!(
+            telemetry_transport_error_message(&build),
+            "invalid header value"
+        );
+        assert_eq!(telemetry_api_error_message(&stream), "socket closed");
     }
 }

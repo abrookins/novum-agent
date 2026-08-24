@@ -3,6 +3,7 @@ use crate::agent::control::SpawnAgentOptions;
 use crate::config::test_config;
 use crate::init_state_db;
 use crate::installation_id::INSTALLATION_ID_FILENAME;
+use crate::mcp::McpEnvironmentScope;
 use crate::mcp::McpThreadIdentity;
 use crate::rollout::RolloutRecorder;
 use crate::session::session::SessionSettingsUpdate;
@@ -21,6 +22,8 @@ use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::mcp::MCP_APP_UI_EXTENSION_ID;
 use codex_protocol::mcp::OPENAI_FORM_EXTENSION_ID;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ContentItemKind;
+use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
@@ -56,6 +59,62 @@ fn thread_id_generator_defaults_to_standard_ids() {
         agent_control.generate_thread_id(),
         agent_control.generate_thread_id()
     );
+}
+
+#[tokio::test]
+async fn reserved_thread_id_is_used_without_changing_normal_id_generation() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let generated_ids = [
+        ThreadId::from_u128(/*value*/ 0x018f_0000_0000_7000_8000_0000_0000_0001),
+        ThreadId::from_u128(/*value*/ 0x018f_0000_0000_7000_8000_0000_0000_0002),
+        ThreadId::from_u128(/*value*/ 0x018f_0000_0000_7000_8000_0000_0000_0003),
+    ];
+    let next_id = std::sync::atomic::AtomicUsize::new(0);
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    )
+    .with_thread_id_generator(move || generated_ids[next_id.fetch_add(1, Ordering::Relaxed)]);
+
+    let reserved_id = manager.reserve_thread_id();
+    let mut reserved_options = StartThreadOptions::new(config.clone());
+    reserved_options.reserved_thread_id = Some(reserved_id);
+    let reserved = manager
+        .start_thread(reserved_options)
+        .await
+        .expect("start reserved thread");
+    let mut resumed_options = StartThreadOptions::new(config.clone());
+    resumed_options.initial_history = InitialHistory::Resumed(ResumedHistory {
+        conversation_id: reserved.thread_id,
+        history: Arc::new(Vec::new()),
+        rollout_path: None,
+    });
+    let resumed_id = manager.reserve_thread_id();
+    resumed_options.reserved_thread_id = Some(resumed_id);
+    let resume_error = manager
+        .start_thread(resumed_options)
+        .await
+        .err()
+        .expect("reject reserved ID for resume");
+    let generated = manager
+        .start_thread(StartThreadOptions::new(config.clone()))
+        .await
+        .expect("start generated thread");
+
+    assert_eq!(reserved.thread_id, generated_ids[0]);
+    assert!(matches!(
+        resume_error.details(),
+        codex_protocol::error::CodexErrorDetails::InvalidRequest(message)
+            if message == "reserved thread ID cannot be used when resuming a thread"
+    ));
+    assert_eq!(generated.thread_id, generated_ids[2]);
 }
 
 /// One custom ID factory supplies identifiers for roots, actual child agents, and forks.
@@ -818,6 +877,87 @@ async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
 }
 
 #[tokio::test]
+async fn spawn_internal_session_preserves_parent_lineage_without_forking_history() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let parent = manager
+        .start_thread(StartThreadOptions {
+            metrics_service_name: Some("codex_work_desktop".to_string()),
+            ..StartThreadOptions::new(config.clone())
+        })
+        .await
+        .expect("start parent thread");
+    let reviewer = manager
+        .spawn_internal_session(
+            parent.thread_id,
+            StartThreadOptions {
+                session_source: Some(SessionSource::Internal(InternalSessionSource::Guardian)),
+                initial_history: InitialHistory::Forked(vec![RolloutItem::ResponseItem(
+                    user_msg("parent history must not be inherited").into(),
+                )]),
+                environments: Some(Vec::new()),
+                ..StartThreadOptions::new(config)
+            },
+        )
+        .await
+        .expect("start internal reviewer");
+    let reviewer_config = reviewer.thread.config_snapshot().await;
+
+    assert_eq!(
+        reviewer.session_configured.session_id,
+        parent.session_configured.session_id
+    );
+    assert!(std::ptr::eq(
+        reviewer
+            .thread
+            .session
+            .services
+            .agent_control
+            .rollout_budget(),
+        parent
+            .thread
+            .session
+            .services
+            .agent_control
+            .rollout_budget(),
+    ));
+    assert_eq!(reviewer_config.parent_thread_id, Some(parent.thread_id));
+    assert_eq!(reviewer_config.forked_from_thread_id, None);
+    assert_eq!(reviewer_config.originator, "codex_work_desktop");
+    assert_eq!(
+        reviewer.session_configured.parent_thread_id,
+        Some(parent.thread_id)
+    );
+    assert_eq!(reviewer.session_configured.forked_from_id, None);
+    assert_eq!(manager.list_thread_ids().await, vec![parent.thread_id]);
+    assert!(manager.get_thread(reviewer.thread_id).await.is_err());
+    assert!(
+        reviewer
+            .thread
+            .session
+            .clone_history()
+            .await
+            .raw_items()
+            .next()
+            .is_none()
+    );
+
+    manager
+        .shutdown_all_threads_bounded(Duration::from_secs(10))
+        .await;
+}
+
+#[tokio::test]
 async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() {
     struct InitialDataRecorder {
         lifecycle_observed: Arc<std::sync::Mutex<Vec<(String, String)>>>,
@@ -975,6 +1115,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             McpThreadIdentity {
                 session_source: &SessionSource::Exec,
                 originator: &first_originator,
+                environments: McpEnvironmentScope::Live(&first_session.services.turn_environments),
             },
             /*ready_selected_capability_roots*/ &[],
             /*executor_capability_discovery*/ None,
@@ -992,6 +1133,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             McpThreadIdentity {
                 session_source: &second_session_source,
                 originator: &second_originator,
+                environments: McpEnvironmentScope::Live(&second_session.services.turn_environments),
             },
             /*ready_selected_capability_roots*/ &[],
             /*executor_capability_discovery*/ None,
@@ -2013,19 +2155,27 @@ fn interrupted_snapshot_is_not_mid_turn() {
 
 #[test]
 fn multi_agent_v2_interrupted_marker_uses_developer_input_message() {
-    let marker = developer_interrupted_marker();
-
-    let ResponseItem::Message { role, content, .. } = marker else {
-        panic!("expected interrupted marker to be a message");
-    };
-    assert_eq!(role, "developer");
-    assert!(
-        matches!(
-            content.as_slice(),
-            [ContentItem::InputText { text }]
-                if text.contains(crate::context::TurnAborted::INTERRUPTED_DEVELOPER_GUIDANCE)
-        ),
-        "expected interrupted marker to use developer InputText content"
+    assert_eq!(
+        developer_interrupted_marker(),
+        ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: format!(
+                    "<turn_aborted>\n{}\n</turn_aborted>",
+                    crate::context::TurnAborted::INTERRUPTED_DEVELOPER_GUIDANCE
+                ),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: Some(
+                InternalChatMessageMetadataPassthrough {
+                    content_item_kinds: Some(vec![ContentItemKind(
+                        "generic.turn_aborted".to_string()
+                    )]),
+                    ..Default::default()
+                }
+            ),
+        }
     );
 }
 
@@ -2044,6 +2194,7 @@ fn completed_legacy_event_history_is_not_mid_turn() {
             message: "done".to_string(),
             phase: None,
             memory_citation: None,
+            delivery: None,
         })),
     ]);
 

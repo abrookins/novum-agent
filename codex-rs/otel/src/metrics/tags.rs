@@ -104,9 +104,21 @@ impl<'a> SessionMetricTagValues<'a> {
         let mut tags = Vec::with_capacity(6);
         Self::push_optional_tag(&mut tags, AUTH_MODE_TAG, self.auth_mode)?;
         Self::push_optional_tag(&mut tags, SESSION_SOURCE_TAG, Some(self.session_source))?;
-        Self::push_optional_tag(&mut tags, ORIGINATOR_TAG, Some(self.originator))?;
-        Self::push_optional_tag(&mut tags, SERVICE_NAME_TAG, self.service_name)?;
-        Self::push_optional_tag(&mut tags, MODEL_TAG, Some(self.model))?;
+        Self::push_optional_tag(
+            &mut tags,
+            ORIGINATOR_TAG,
+            Some(bounded_originator_tag_value(self.originator)),
+        )?;
+        Self::push_optional_tag(
+            &mut tags,
+            SERVICE_NAME_TAG,
+            self.service_name.map(bounded_originator_tag_value),
+        )?;
+        Self::push_optional_tag(
+            &mut tags,
+            MODEL_TAG,
+            Some(bounded_model_category(self.model)),
+        )?;
         Self::push_optional_tag(&mut tags, APP_VERSION_TAG, Some(self.app_version))?;
         Ok(tags)
     }
@@ -158,9 +170,9 @@ mod tests {
             vec![
                 (AUTH_MODE_TAG, "api_key"),
                 (SESSION_SOURCE_TAG, "cli"),
-                (ORIGINATOR_TAG, "codex_cli"),
-                (SERVICE_NAME_TAG, "desktop_app"),
-                (MODEL_TAG, "gpt-5.1"),
+                (ORIGINATOR_TAG, "other"),
+                (SERVICE_NAME_TAG, "other"),
+                (MODEL_TAG, "openai"),
                 (APP_VERSION_TAG, "1.2.3"),
             ]
         );
@@ -184,7 +196,7 @@ mod tests {
             vec![
                 (SESSION_SOURCE_TAG, "exec"),
                 (ORIGINATOR_TAG, "codex_exec"),
-                (MODEL_TAG, "gpt-5.1"),
+                (MODEL_TAG, "openai"),
                 (APP_VERSION_TAG, "1.2.3"),
             ]
         );
