@@ -35,6 +35,12 @@ pub trait ToolOutput: Send {
         false
     }
 
+    /// Overrides history's fallback token limit after tool-specific truncation.
+    /// Include any serialization allowance; history uses this limit unchanged.
+    fn fallback_token_limit_override(&self) -> Option<usize> {
+        None
+    }
+
     fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem;
 
     /// Returns the model-visible response after a recoverable-output preview
@@ -128,6 +134,17 @@ pub trait ToolOutput: Send {
     fn recoverable_output(&self) -> Option<RecoverableToolOutput> {
         None
     }
+
+    /// Returns the budget for the model-visible preview that accompanies a
+    /// recoverable-output handle.
+    fn recoverable_preview_policy(&self, policy: TruncationPolicy) -> TruncationPolicy {
+        policy
+    }
+
+    /// Reports configured source capture only after acceptance; `None` means no capture attempt.
+    fn tool_result_sources(&self) -> Option<codex_protocol::models::ToolResultSources> {
+        None
+    }
 }
 
 impl<T> ToolOutput for Box<T>
@@ -144,6 +161,10 @@ where
 
     fn contains_external_context(&self) -> bool {
         (**self).contains_external_context()
+    }
+
+    fn fallback_token_limit_override(&self) -> Option<usize> {
+        (**self).fallback_token_limit_override()
     }
 
     fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
@@ -206,6 +227,14 @@ where
 
     fn recoverable_output(&self) -> Option<RecoverableToolOutput> {
         (**self).recoverable_output()
+    }
+
+    fn recoverable_preview_policy(&self, policy: TruncationPolicy) -> TruncationPolicy {
+        (**self).recoverable_preview_policy(policy)
+    }
+
+    fn tool_result_sources(&self) -> Option<codex_protocol::models::ToolResultSources> {
+        (**self).tool_result_sources()
     }
 }
 

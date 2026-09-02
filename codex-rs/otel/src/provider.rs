@@ -320,7 +320,14 @@ impl OtelProvider {
     }
 
     pub fn trace_export_filter(meta: &tracing::Metadata<'_>) -> bool {
-        meta.is_span() || is_trace_safe_target(meta.target())
+        let target = meta.target();
+        if meta.is_span() {
+            // h2 creates explicit-root spans that escape the SDK's telemetry suppression.
+            // Exporting them would make OTLP transport generate more OTLP exports.
+            target != "h2" && !target.starts_with("h2::")
+        } else {
+            is_trace_safe_target(target)
+        }
     }
 
     pub fn metrics(&self) -> Option<&MetricsClient> {
@@ -581,6 +588,7 @@ mod tests {
     use crate::metrics::RESPONSES_API_ENGINE_SERVICE_TTFT_DURATION_METRIC;
     use crate::metrics::TOOL_CALL_COUNT_METRIC;
     use crate::metrics::TOOL_CALL_DURATION_METRIC;
+    use crate::metrics::TURN_COST_MICROUSD_METRIC;
     use crate::metrics::TURN_TOKEN_USAGE_METRIC;
     use opentelemetry_sdk::metrics::InMemoryMetricExporter;
     use pretty_assertions::assert_eq;
@@ -685,6 +693,7 @@ mod tests {
         )?;
         metrics.counter(TOOL_CALL_COUNT_METRIC, /*inc*/ 1, &[])?;
         metrics.record_duration(TOOL_CALL_DURATION_METRIC, Duration::from_millis(25), &[])?;
+        metrics.counter(TURN_COST_MICROUSD_METRIC, /*inc*/ 1, &[])?;
         metrics.histogram(TURN_TOKEN_USAGE_METRIC, /*value*/ 100, &[])?;
         metrics.counter("codex.turns", /*inc*/ 1, &[])?;
         metrics.shutdown()?;

@@ -117,7 +117,10 @@ impl ToolExecutor<ToolInvocation> for ToolOutputReadHandler {
         })
     }
 
-    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+    fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'a>
+    where
+        ToolInvocation: 'a,
+    {
         Box::pin(async move {
             let ToolPayload::Function { arguments } = invocation.payload else {
                 return Err(FunctionCallError::RespondToModel(
@@ -127,7 +130,7 @@ impl ToolExecutor<ToolInvocation> for ToolOutputReadHandler {
             let args: ReadArgs = parse_arguments(&arguments)?;
             let max_tokens = validate_max_tokens(
                 args.max_tokens,
-                invocation.turn.model_info.truncation_policy.into(),
+                invocation.turn.model_info().truncation_policy.into(),
             )?;
             let output = invocation
                 .session
@@ -196,7 +199,10 @@ impl ToolExecutor<ToolInvocation> for ToolOutputSearchHandler {
         })
     }
 
-    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+    fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'a>
+    where
+        ToolInvocation: 'a,
+    {
         Box::pin(async move {
             let ToolPayload::Function { arguments } = invocation.payload else {
                 return Err(FunctionCallError::RespondToModel(
@@ -205,7 +211,7 @@ impl ToolExecutor<ToolInvocation> for ToolOutputSearchHandler {
             };
             let args: SearchArgs = parse_arguments(&arguments)?;
             validate_search_args(&args)?;
-            let policy: TruncationPolicy = invocation.turn.model_info.truncation_policy.into();
+            let policy: TruncationPolicy = invocation.turn.model_info().truncation_policy.into();
             let output = invocation
                 .session
                 .tool_output_store

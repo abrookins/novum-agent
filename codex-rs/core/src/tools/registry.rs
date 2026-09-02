@@ -11,8 +11,6 @@ use crate::hook_runtime::run_post_tool_use_hooks;
 use crate::hook_runtime::run_pre_tool_use_hooks;
 use crate::memory_usage::emit_metric_for_tool_read;
 use crate::memory_usage::shell_script_for_invocation;
-use crate::sandbox_tags::permission_profile_policy_tag;
-use crate::sandbox_tags::permission_profile_sandbox_tag;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
@@ -31,6 +29,8 @@ use crate::tools::tool_dispatch_trace::ToolDispatchTrace;
 use crate::util::error_or_panic;
 use codex_analytics::ControlToolCallStatus;
 use codex_extension_api::ToolCallOutcome;
+use codex_history::CodexHarnessMetadata;
+use codex_history::ResponseItemEnvelope;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::parse_command::ParsedCommand;
@@ -195,14 +195,22 @@ pub(crate) struct AnyToolResult {
 }
 
 impl AnyToolResult {
-    pub(crate) fn into_response(self) -> ResponseInputItem {
+    pub(crate) fn into_response(self) -> ResponseItemEnvelope {
         let Self {
             call_id,
             payload,
             result,
             ..
         } = self;
-        result.to_response_item(&call_id, &payload)
+        ResponseItemEnvelope {
+            item: result.to_response_item(&call_id, &payload).into(),
+            metadata: result
+                .fallback_token_limit_override()
+                .map(|limit| CodexHarnessMetadata {
+                    fallback_token_limit_override: Some(limit),
+                    ..Default::default()
+                }),
+        }
     }
 
     pub(crate) fn code_mode_result(self) -> serde_json::Value {
@@ -281,6 +289,10 @@ impl ToolOutput for RecoverableOutputPreview {
         // A retrieval result must not produce a second handle.
         None
     }
+
+    fn tool_result_sources(&self) -> Option<codex_protocol::models::ToolResultSources> {
+        self.original.tool_result_sources()
+    }
 }
 
 impl ToolOutput for PostToolUseFeedbackOutput {
@@ -290,6 +302,10 @@ impl ToolOutput for PostToolUseFeedbackOutput {
 
     fn success_for_logging(&self) -> bool {
         self.original.success_for_logging()
+    }
+
+    fn fallback_token_limit_override(&self) -> Option<usize> {
+        self.original.fallback_token_limit_override()
     }
 
     fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
@@ -306,6 +322,10 @@ impl ToolOutput for PostToolUseFeedbackOutput {
         policy: TruncationPolicy,
     ) -> Value {
         self.original.code_mode_result_with_policy(payload, policy)
+    }
+
+    fn tool_result_sources(&self) -> Option<codex_protocol::models::ToolResultSources> {
+        self.original.tool_result_sources()
     }
 }
 
@@ -561,25 +581,9 @@ impl ToolRegistry {
         let tool_name = invocation.tool_name.clone();
         let call_id_owned = invocation.call_id.clone();
         let otel = invocation.turn.session_telemetry.clone();
-        let permission_profile = invocation.turn.permission_profile();
-        let base_tool_result_tags = [
-            (
-                "sandbox",
-                permission_profile_sandbox_tag(
-                    &permission_profile,
-                    invocation.turn.windows_sandbox_level,
-                    invocation.turn.network.is_some(),
-                ),
-            ),
-            (
-                "sandbox_policy",
-                permission_profile_policy_tag(
-                    &permission_profile,
-                    #[allow(deprecated)]
-                    invocation.turn.cwd.as_path(),
-                ),
-            ),
-        ];
+        // TODO(anp): Reconcile these tags with TurnEnvironment::sandbox_context
+        // instead of reporting the thread-wide backend for environment-scoped tools.
+        let sandbox_tags = invocation.turn.turn_metadata_state.sandbox_tags;
 
         {
             let mut active = invocation.session.active_turn.lock().await;
@@ -595,6 +599,8 @@ impl ToolRegistry {
             None => {
                 let message = unsupported_tool_call_message(&invocation.payload, &tool_name);
                 let log_payload = tool_log_payload(&invocation.payload, &invocation.source);
+                let mut tool_result_tags = Vec::with_capacity(2);
+                sandbox_tags.append_metric_tags(&mut tool_result_tags);
                 otel.tool_result_with_tags(
                     &tool_name,
                     &call_id_owned,
@@ -602,7 +608,7 @@ impl ToolRegistry {
                     Duration::ZERO,
                     /*success*/ false,
                     &message,
-                    &base_tool_result_tags,
+                    &tool_result_tags,
                     /*extra_trace_fields*/ &[],
                 );
                 let err = FunctionCallError::RespondToModel(message);
@@ -611,10 +617,9 @@ impl ToolRegistry {
             }
         };
         let telemetry_tags = tool.telemetry_tags(&invocation);
-        let mut tool_result_tags =
-            Vec::with_capacity(base_tool_result_tags.len() + telemetry_tags.len() + 1);
+        let mut tool_result_tags = Vec::with_capacity(2 + telemetry_tags.len() + 1);
         let mut extra_trace_fields = Vec::new();
-        tool_result_tags.extend_from_slice(&base_tool_result_tags);
+        sandbox_tags.append_metric_tags(&mut tool_result_tags);
         for (key, value) in &telemetry_tags {
             if matches!(*key, "mcp_server" | "mcp_server_origin") {
                 extra_trace_fields.push((*key, value.as_str()));
@@ -694,7 +699,9 @@ impl ToolRegistry {
             }
         }
 
-        notify_tool_start(&invocation).await;
+        if tool.mcp_server_name().is_none() {
+            notify_tool_start(&invocation, /*mcp_tool*/ None).await;
+        }
         let mut control_tool_analytics = tool
             .is_builtin_control_tool()
             .then(|| ControlToolCallGuard::new(&invocation));
@@ -849,7 +856,7 @@ async fn handle_any_tool(
 ) -> Result<AnyToolResult, FunctionCallError> {
     let call_id = invocation.call_id.clone();
     let payload = invocation.payload.clone();
-    let truncation_policy = invocation.turn.model_info.truncation_policy.into();
+    let truncation_policy = invocation.turn.model_info().truncation_policy.into();
     let output = tool.handle(invocation.clone()).await?;
     let contains_external_context = output.contains_external_context();
     let post_tool_use_payload =
@@ -878,6 +885,7 @@ async fn recover_oversized_output(
     truncation_policy: TruncationPolicy,
     invocation: &ToolInvocation,
 ) -> Box<dyn ToolOutput> {
+    let preview_policy = output.recoverable_preview_policy(truncation_policy);
     let stored_output = output.recoverable_output();
     let (stored_output, preview_source) = match stored_output {
         Some(stored_output) => {
@@ -907,7 +915,7 @@ async fn recover_oversized_output(
 
     Box::new(RecoverableOutputPreview {
         original: output,
-        preview: preview_with_handle(&preview_source, &stored_output, truncation_policy),
+        preview: preview_with_handle(&preview_source, &stored_output, preview_policy),
     })
 }
 
