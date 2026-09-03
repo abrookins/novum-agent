@@ -87,6 +87,29 @@ Treat this checkout as Andrew's private macOS fork unless the user says the work
 
 Before finalizing a large change to `codex-rs`, run `just fix -p <project>` (in `codex-rs` directory) to fix any linter issues in the code. Prefer scoping with `-p` to avoid slow workspace‑wide Clippy builds; only run `just fix` without `-p` if you changed shared crates. Do not re-run tests after running `fix` or `fmt`.
 
+### Installing a local Codex build
+
+Install with `./scripts/install-local-codex.sh` from the repo root, which wraps
+`just assemble-codex-package`. Never copy `codex-rs/target/*/codex` into a prefix by
+hand and never hand-create the prefix symlinks; improvised installs have silently
+broken this checkout before.
+
+- `codex` and `codex-code-mode-host` are separate binaries sharing a wire protocol
+  that has no version negotiation, so they must always be installed together from
+  the same commit. The installer builds both in one Cargo invocation, and
+  `validate_package_dir` fails the build when the host is missing.
+- The installed tree must be a real package directory, with `codex-package.json`
+  beside `bin/`. That metadata is what lets `InstallContext` resolve
+  `codex-code-mode-host` from inside the package. Without it, resolution falls back
+  to `<prefix>/bin/codex-code-mode-host`, where a symlink from an older install can
+  outlive its `codex` and yield a `missing field` decode error on every code-mode
+  tool call.
+- `code-mode-runtime` enables the `v8_enable_sandbox` feature, so a bare
+  `cargo build -p codex-code-mode-host` fails: upstream `denoland/rusty_v8` publishes
+  no sandbox archive for the pinned version. Let the installer or the package builder
+  fetch the Codex-built artifacts, or set `RUSTY_V8_ARCHIVE` and
+  `RUSTY_V8_SRC_BINDING_PATH` together yourself.
+
 ## The `codex-core` crate
 
 Over time, the `codex-core` crate (defined in `codex-rs/core/`) has become bloated because it is the largest crate, so it is often easier to add something new to `codex-core` rather than refactor out the library code you need so your new code neither takes a dependency on, nor contributes to the size of, `codex-core`.
