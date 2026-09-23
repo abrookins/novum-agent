@@ -34,6 +34,7 @@ use super::UNIFIED_EXEC_OUTPUT_MAX_TOKENS;
 use super::UnifiedExecError;
 use super::head_tail_buffer::HeadTailBuffer;
 use super::process_state::ProcessState;
+use crate::shell_snapshot::ShellSnapshotFile;
 use crate::tools::output_store::ToolOutputStream;
 
 const EARLY_EXIT_GRACE_PERIOD: Duration = Duration::from_millis(150);
@@ -98,9 +99,11 @@ pub(crate) struct UnifiedExecProcess {
     state_tx: watch::Sender<ProcessState>,
     state_rx: watch::Receiver<ProcessState>,
     output_task: Option<JoinHandle<()>>,
-    sandbox_type: SandboxType,
+    sandbox_type: Option<SandboxType>,
     timed_out: AtomicBool,
     _spawn_lifecycle: Option<SpawnLifecycleHandle>,
+    // The shell may still need to replay this file after process startup returns.
+    pub(crate) _shell_snapshot: Option<Arc<ShellSnapshotFile>>,
 }
 
 impl std::fmt::Debug for UnifiedExecProcess {
@@ -116,7 +119,7 @@ impl std::fmt::Debug for UnifiedExecProcess {
 impl UnifiedExecProcess {
     fn new(
         process_handle: ProcessHandle,
-        sandbox_type: SandboxType,
+        sandbox_type: Option<SandboxType>,
         spawn_lifecycle: Option<SpawnLifecycleHandle>,
         output_stream: Option<ToolOutputStream>,
     ) -> Self {
@@ -144,6 +147,7 @@ impl UnifiedExecProcess {
             sandbox_type,
             timed_out: AtomicBool::new(false),
             _spawn_lifecycle: spawn_lifecycle,
+            _shell_snapshot: None,
         }
     }
 
@@ -281,7 +285,7 @@ impl UnifiedExecProcess {
         guard.to_bytes_with_omission_marker()
     }
 
-    pub(crate) fn sandbox_type(&self) -> SandboxType {
+    pub(crate) fn sandbox_type(&self) -> Option<SandboxType> {
         self.sandbox_type
     }
 
@@ -309,7 +313,7 @@ impl UnifiedExecProcess {
         text: &str,
     ) -> Result<(), UnifiedExecError> {
         let executor_reported_denial = self.state_rx.borrow().sandbox_denied;
-        let sandbox_type = self.sandbox_type();
+        let sandbox_type = self.sandbox_type().unwrap_or(SandboxType::None);
         if !self.has_exited() || (!executor_reported_denial && sandbox_type == SandboxType::None) {
             return Ok(());
         }
@@ -354,7 +358,7 @@ impl UnifiedExecProcess {
         } = spawned;
         let mut managed = Self::new(
             ProcessHandle::Local(Box::new(process_handle)),
-            sandbox_type,
+            Some(sandbox_type),
             Some(spawn_lifecycle),
             output_stream,
         );
@@ -406,7 +410,7 @@ impl UnifiedExecProcess {
         let process_handle = ProcessHandle::ExecServer(Arc::clone(&started.process));
         // Older peers do not report this field. In that case, skip local
         // classification rather than attributing a violation to a guessed backend.
-        let sandbox_type = started.sandbox_type.unwrap_or(SandboxType::None);
+        let sandbox_type = started.sandbox_type;
         let mut managed = Self::new(
             process_handle,
             sandbox_type,

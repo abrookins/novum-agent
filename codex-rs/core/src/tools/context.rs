@@ -22,11 +22,14 @@ use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::formatted_truncate_text;
 use codex_utils_output_truncation::truncate_function_output_payload;
 use codex_utils_output_truncation::truncate_text;
+use codex_utils_output_truncation::with_serialization_allowance;
 use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::sync::OnceLock;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -46,6 +49,14 @@ where
 }
 
 pub type SharedTurnDiffTracker = Arc<Mutex<TurnDiffTracker>>;
+
+/// Host-observed state for one call, owned outside its abortable dispatch task.
+/// Delivery does not finish the call: post-tool hooks can still be cancelled.
+#[derive(Default)]
+pub(crate) struct ToolCallState {
+    pub(crate) terminal_outcome_reached: AtomicBool,
+    pub(crate) delivered_assistant_message: OnceLock<String>,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ToolCallSource {
@@ -75,18 +86,28 @@ pub struct ToolInvocation {
     pub payload: ToolPayload,
 }
 
+/// Identity of the model call that started a tool invocation, retained across code-mode waits.
+#[derive(Clone)]
+pub(crate) struct ToolCallOrigin {
+    /// Best-effort lookup: invocations without a matching history item still
+    /// retain their known window ID.
+    pub(crate) item_id: Option<ResponseItemId>,
+    pub(crate) window_id: String,
+}
+
 impl ToolInvocation {
-    /// Returns the Responses item that requested this call or started its code-mode cell.
-    pub(crate) async fn originating_item_id(&self) -> Option<ResponseItemId> {
+    /// Returns the item and window that requested this call or started its code-mode cell.
+    pub(crate) async fn originating_call(&self) -> Option<ToolCallOrigin> {
         if let ToolCallSource::CodeMode { cell_id, .. } = &self.source {
             return self
                 .session
                 .services
                 .code_mode_service
-                .cell_originating_item_id(&codex_code_mode::CellId::new(cell_id.clone()));
+                .cell_originating_call(&codex_code_mode::CellId::new(cell_id.clone()));
         }
 
-        self.session
+        let item_id = self
+            .session
             .clone_history()
             .await
             .raw_items()
@@ -99,7 +120,11 @@ impl ToolInvocation {
                     id.clone()
                 }
                 _ => None,
-            })
+            });
+        Some(ToolCallOrigin {
+            item_id,
+            window_id: self.session.current_window_id().await,
+        })
     }
 }
 
@@ -107,6 +132,8 @@ impl ToolInvocation {
 pub struct McpToolOutput {
     pub result: CallToolResult,
     pub tool_input: JsonValue,
+    // Keep the original metadata for hooks; this flag only controls analytics capture.
+    pub(crate) result_metadata_capture_allowed: bool,
     pub wall_time: Duration,
     pub original_image_detail_supported: bool,
     pub truncation_policy: TruncationPolicy,
@@ -127,7 +154,7 @@ impl ToolOutput for McpToolOutput {
     }
 
     fn fallback_token_limit_override(&self) -> Option<usize> {
-        Some((self.truncation_policy * 1.2).token_budget())
+        Some(with_serialization_allowance(self.truncation_policy).token_budget())
     }
 
     fn to_response_item(&self, call_id: &str, _payload: &ToolPayload) -> ResponseInputItem {
@@ -143,6 +170,13 @@ impl ToolOutput for McpToolOutput {
 
     fn untruncated_text(&self, payload: &ToolPayload) -> Option<String> {
         self.result.untruncated_text(payload)
+    }
+
+    fn tool_result_metadata(&self) -> Option<&JsonValue> {
+        if !self.result_metadata_capture_allowed {
+            return None;
+        }
+        self.result.meta.as_ref()
     }
 
     fn post_tool_use_input(&self, _payload: &ToolPayload) -> Option<JsonValue> {
@@ -180,7 +214,7 @@ impl McpToolOutput {
         // History receives this budget in tokens. Code Mode keeps the raw result.
         truncate_function_output_payload(
             &mut payload,
-            self.truncation_policy * 1.2,
+            with_serialization_allowance(self.truncation_policy),
             estimate_audio_token_count,
         );
         payload
@@ -530,9 +564,21 @@ impl ExecCommandToolOutput {
         resolve_max_tokens(self.max_output_tokens).min(self.truncation_policy.token_budget())
     }
 
+    fn model_output_policy(&self) -> TruncationPolicy {
+        let requested_policy = TruncationPolicy::Tokens(resolve_max_tokens(self.max_output_tokens));
+        if requested_policy.byte_budget() < self.truncation_policy.byte_budget() {
+            requested_policy
+        } else {
+            self.truncation_policy
+        }
+    }
+
     pub(crate) fn truncated_output(&self, max_tokens: usize) -> String {
+        self.truncated_output_with_policy(TruncationPolicy::Tokens(max_tokens))
+    }
+
+    fn truncated_output_with_policy(&self, policy: TruncationPolicy) -> String {
         let text = String::from_utf8_lossy(&self.raw_output).to_string();
-        let policy = TruncationPolicy::Tokens(max_tokens);
         let Some(omitted_bytes) = self.output_omitted_bytes else {
             return formatted_truncate_text(&text, policy);
         };
@@ -561,10 +607,35 @@ impl ExecCommandToolOutput {
     }
 
     fn response_text(&self) -> String {
-        self.response_text_with_output(self.truncated_output(self.model_output_max_tokens()))
+        let header = self.response_header();
+        let output_budget = with_serialization_allowance(self.truncation_policy)
+            .byte_budget()
+            .saturating_sub(header.len().saturating_add(/*rhs*/ 1));
+        let mut policy = self.model_output_policy();
+        let mut output = self.truncated_output_with_policy(policy);
+
+        // Reserve room for metadata and truncation markers in history's budget.
+        while output.len() > output_budget && policy.byte_budget() > 0 {
+            let excess_bytes = output.len() - output_budget;
+            policy = match policy {
+                TruncationPolicy::Bytes(bytes) => {
+                    TruncationPolicy::Bytes(bytes.saturating_sub(excess_bytes))
+                }
+                TruncationPolicy::Tokens(tokens) => TruncationPolicy::Tokens(
+                    tokens.saturating_sub(TruncationPolicy::Bytes(excess_bytes).token_budget()),
+                ),
+            };
+            output = self.truncated_output_with_policy(policy);
+        }
+
+        format!("{header}\n{output}")
     }
 
     fn response_text_with_output(&self, output: String) -> String {
+        format!("{}\n{output}", self.response_header())
+    }
+
+    fn response_header(&self) -> String {
         let mut sections = Vec::new();
 
         if !self.chunk_id.is_empty() {
@@ -587,7 +658,6 @@ impl ExecCommandToolOutput {
         }
 
         sections.push("Output:".to_string());
-        sections.push(output);
 
         sections.join("\n")
     }

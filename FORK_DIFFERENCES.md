@@ -5,10 +5,11 @@ This file is the maintained inventory of behavior that must persist when
 
 ## Current comparison
 
-- Upstream reference: `upstream/main` at `a25e986323931ec54909b0cd936b612f30c8ce46`
-- Fork reference: `main` at `7ffd9bb93`
-- Merge base: `a25e986323931ec54909b0cd936b612f30c8ce46`
-- Scope: 70 changed files, 3,518 insertions, and 873 deletions.
+- Upstream reference: `upstream/main` at `6824dabe0393337a38cb257d5fe75ae5ca168470`
+- Fork reference: the merge commit containing this inventory, based on `815b465b8`.
+- Merge base after integration: `6824dabe0393337a38cb257d5fe75ae5ca168470`
+- Scope: 83 changed files relative to upstream, including this inventory and the
+  local package installer.
 
 ## Required fork behavior
 
@@ -21,6 +22,8 @@ This file is the maintained inventory of behavior that must persist when
   run before telemetry export.
 - Keep the log-only events for OpenAI file uploads free of file IDs, hosts, and
   provider request identifiers.
+- Keep agent communication logs detached from spans that contain thread or call
+  identifiers.
 - Main ownership paths: `codex-rs/otel/src/trace_sanitizer.rs`,
   `codex-rs/otel/src/{provider.rs,metrics/,events/}`, and the telemetry call
   sites in `codex-rs/core/`, `codex-rs/codex-api/`, and
@@ -40,6 +43,8 @@ This file is the maintained inventory of behavior that must persist when
   can expose recoverable output without expanding the model context.
 - Keep the shared output representation in `codex-rs/tools/src/tool_output.rs`
   aligned with Code Mode and unified exec.
+- Preserve MCP tool output limits, result metadata, and history truncation
+  metadata when a recoverable preview wraps the original result.
 - Main ownership paths: `codex-rs/core/src/tools/{context.rs,output_store.rs,
   registry.rs,handlers/tool_output.rs,runtimes/unified_exec.rs}`, and
   `codex-rs/core/src/unified_exec/`.

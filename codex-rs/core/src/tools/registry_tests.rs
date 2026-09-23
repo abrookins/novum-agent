@@ -564,7 +564,9 @@ async fn code_mode_wait_does_not_expose_default_hook_payloads() {
     let (session, turn) = crate::session::tests::make_session_and_context().await;
     let output = crate::tools::context::FunctionToolOutput::from_text("ok".to_string(), Some(true));
 
-    let wait = crate::tools::handlers::CodeModeWaitHandler;
+    let wait = crate::tools::handlers::CodeModeWaitHandler::new(
+        /*description_override*/ None, /*parameters_override*/ None,
+    );
     let wait_invocation = test_invocation(
         Arc::new(session),
         Arc::new(turn),
@@ -610,6 +612,7 @@ fn post_tool_use_feedback_output_preserves_fallback_token_limit_override(
                     meta: None,
                 },
                 tool_input: serde_json::json!({}),
+                result_metadata_capture_allowed: false,
                 wall_time: Duration::ZERO,
                 original_image_detail_supported: false,
                 truncation_policy,
@@ -631,7 +634,7 @@ fn post_tool_use_feedback_output_preserves_fallback_token_limit_override(
                 output: FunctionCallOutputPayload::from_text("hook feedback".to_string()),
             }),
             metadata: Some(CodexHarnessMetadata {
-                fallback_token_limit_override: Some(expected_token_limit),
+                history_truncation_token_limit: Some(expected_token_limit),
                 ..Default::default()
             }),
         }
@@ -867,6 +870,56 @@ fn recoverable_preview_does_not_rewrite_mcp_content_arrays() {
     );
 }
 
+#[test_case::test_case(false; "success")]
+#[test_case::test_case(true; "tool error")]
+fn output_wrappers_preserve_mcp_result_metadata(tool_error: bool) {
+    let metadata = serde_json::json!({
+        "openai/resource_access": { "resources": [] },
+        "provider/custom": { "items": [1, null, { "value": true }] },
+    });
+    let result = PostToolUseFeedbackOutput {
+        original: Box::new(crate::tools::context::McpToolOutput {
+            result: codex_protocol::mcp::CallToolResult {
+                content: vec![serde_json::json!({
+                    "type": "text",
+                    "text": "original result",
+                })],
+                structured_content: None,
+                is_error: Some(tool_error),
+                meta: Some(metadata.clone()),
+            },
+            tool_input: serde_json::json!({ "query": "rewritten query" }),
+            result_metadata_capture_allowed: true,
+            wall_time: std::time::Duration::ZERO,
+            original_image_detail_supported: false,
+            truncation_policy: codex_utils_output_truncation::TruncationPolicy::Bytes(64),
+        }),
+        model_visible: FunctionToolOutput::from_text(
+            "unrelated hook feedback".to_string(),
+            /*success*/ None,
+        ),
+    };
+    let payload = ToolPayload::Function {
+        arguments: "{}".to_string(),
+    };
+    let original_result = result.original.code_mode_result(&payload);
+    assert_eq!(result.tool_result_metadata(), Some(&metadata));
+    assert_eq!(result.code_mode_result(&payload), original_result);
+
+    let fallback_limit = result.fallback_token_limit_override();
+    let preview = RecoverableOutputPreview {
+        original: result.original,
+        preview: "recoverable output preview".to_string(),
+    };
+    assert_eq!(
+        (
+            preview.tool_result_metadata(),
+            preview.fallback_token_limit_override(),
+        ),
+        (Some(&metadata), fallback_limit),
+    );
+}
+
 #[tokio::test]
 async fn dispatch_uses_canonical_tool_names_for_lifecycle_contributors() -> anyhow::Result<()> {
     let (mut session, turn) = crate::session::tests::make_session_and_context().await;
@@ -894,25 +947,25 @@ async fn dispatch_uses_canonical_tool_names_for_lifecycle_contributors() -> anyh
     let turn = Arc::new(turn);
 
     registry
-        .dispatch_any_with_terminal_outcome(
+        .dispatch_any_with_state(
             test_invocation(
                 Arc::clone(&session),
                 Arc::clone(&turn),
                 "ok-call",
                 codex_tools::ToolName::namespaced(DEFAULT_FUNCTION_NAMESPACE, "ok_tool"),
             ),
-            /*terminal_outcome_reached*/ None,
+            /*call_state*/ None,
         )
         .await?;
     let err = match registry
-        .dispatch_any_with_terminal_outcome(
+        .dispatch_any_with_state(
             test_invocation(
                 Arc::clone(&session),
                 Arc::clone(&turn),
                 "failing-call",
                 failing_tool.clone(),
             ),
-            /*terminal_outcome_reached*/ None,
+            /*call_state*/ None,
         )
         .await
     {
