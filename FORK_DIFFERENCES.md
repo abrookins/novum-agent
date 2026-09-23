@@ -6,12 +6,25 @@ This file is the maintained inventory of behavior that must persist when
 ## Current comparison
 
 - Upstream reference: `upstream/main` at `6824dabe0393337a38cb257d5fe75ae5ca168470`
-- Fork reference: the merge commit containing this inventory, based on `815b465b8`.
+- Fork reference: the commit containing this inventory, based on merge `dbcd1b92b4`.
 - Merge base after integration: `6824dabe0393337a38cb257d5fe75ae5ca168470`
-- Scope: 83 changed files relative to upstream, including this inventory and the
+- Scope: 89 changed files relative to upstream, including this inventory and the
   local package installer.
 
 ## Required fork behavior
+
+### Release identity and installation
+
+- Preserve the fork installation link in `README.md` and the agent procedure in
+  `FORK_INSTRUCTIONS.md`.
+- `codex -V` reports the package version; `codex --version` also reports Novum
+  and the compiled commit. Use independent `novum-v<version>` release tags.
+- Package the CLI and Code Mode host together. Preserve package metadata and
+  bundled resources when installing prebuilt release assets.
+- Main ownership paths: `codex-rs/cli/src/main.rs`,
+  `codex-rs/cli/tests/version.rs`, and `scripts/install-local-codex.sh`.
+- Daemon lifecycle tests must isolate the installer's home and launcher paths
+  and prevent downloads of upstream executables.
 
 ### Telemetry privacy
 
@@ -46,7 +59,7 @@ This file is the maintained inventory of behavior that must persist when
 - Preserve MCP tool output limits, result metadata, and history truncation
   metadata when a recoverable preview wraps the original result.
 - Main ownership paths: `codex-rs/core/src/tools/{context.rs,output_store.rs,
-  registry.rs,handlers/tool_output.rs,runtimes/unified_exec.rs}`, and
+registry.rs,handlers/tool_output.rs,runtimes/unified_exec.rs}`, and
   `codex-rs/core/src/unified_exec/`.
 - Tests: focused `codex-core` tool-output, unified-exec, and Code Mode tests.
 

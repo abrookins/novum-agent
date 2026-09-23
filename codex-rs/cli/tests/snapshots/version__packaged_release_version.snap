@@ -1,0 +1,5 @@
+---
+source: cli/tests/version.rs
+expression: "long.replace(provenance.trim_end(), \"[COMMIT])\")"
+---
+codex-cli 0.1.0 (Novum; commit [COMMIT])
