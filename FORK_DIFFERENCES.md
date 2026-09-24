@@ -9,7 +9,7 @@ upstream release is merged into this fork. It is not a generated diff.
 - Fork reference before merge: `main` at `6be24a90d448b9bab7f0c1e0847d0145bb1258fa`
 - Merge branch: `sync/upstream-0.156.1`
 - Merge base: `a526f54b005f0647dec041f26a67356be88b15fe`
-- Post-merge fork delta from the tag: 84 changed files, 4,002 insertions, and
+- Post-merge fork delta from the tag: 87 changed files, 4,135 insertions, and
   1,072 deletions.
 
 ## Required fork behavior
