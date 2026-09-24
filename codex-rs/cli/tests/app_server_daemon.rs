@@ -57,7 +57,27 @@ impl TestDaemon {
 
     fn command(&self) -> Command {
         let mut command = Command::new(&self.codex);
-        command.env("CODEX_HOME", self.home.path());
+        // Updaters launch the real installer, which also writes HOME and the
+        // launcher directory. Keep every installation path inside this fixture.
+        command
+            .env("CODEX_HOME", self.home.path())
+            .env("HOME", self.home.path())
+            .env("CODEX_INSTALL_DIR", self.home.path().join("bin"));
+        // Lifecycle tests must not download a different executable while they
+        // are running. Leave loopback available for local app-server traffic.
+        for name in [
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "all_proxy",
+        ] {
+            command.env(name, "http://127.0.0.1:9");
+        }
+        for name in ["NO_PROXY", "no_proxy"] {
+            command.env(name, "localhost,127.0.0.1,::1");
+        }
         command
     }
 

@@ -114,13 +114,21 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::user_input::UserInput;
 use codex_terminal_detection::TerminalName;
 
+static CLI_VERSION: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| codex_build_info::BuildInfo::get().to_string());
+static CLI_LONG_VERSION: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    let info = codex_build_info::BuildInfo::get();
+    format!("{info} (Novum; commit {})", info.build_commit())
+});
+
 /// Codex CLI
 ///
 /// If no subcommand is specified, options will be forwarded to the interactive CLI.
 #[derive(Debug, Parser)]
 #[clap(
     author,
-    version,
+    version = CLI_VERSION.as_str(),
+    long_version = CLI_LONG_VERSION.as_str(),
     // If a sub‑command is given, ignore requirements of the default args.
     subcommand_negates_reqs = true,
     // The executable is sometimes invoked via a platform‑specific name like

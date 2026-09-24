@@ -9,10 +9,23 @@ upstream release is merged into this fork. It is not a generated diff.
 - Fork reference before merge: `main` at `6be24a90d448b9bab7f0c1e0847d0145bb1258fa`
 - Merge branch: `sync/upstream-0.156.1`
 - Merge base: `a526f54b005f0647dec041f26a67356be88b15fe`
-- Post-merge fork delta from the tag: 81 changed files, 3,945 insertions, and
-  1,070 deletions.
+- Post-merge fork delta from the tag: 84 changed files, 4,002 insertions, and
+  1,072 deletions.
 
 ## Required fork behavior
+
+### Release identity and installation
+
+- Preserve the fork installation link in `README.md` and the agent procedure in
+  `FORK_INSTRUCTIONS.md`.
+- `codex -V` reports the package version; `codex --version` also reports Novum
+  and the compiled commit. Use independent `novum-v<version>` release tags.
+- Package the CLI and Code Mode host together. Preserve package metadata and
+  bundled resources when installing prebuilt release assets.
+- Main ownership paths: `codex-rs/cli/src/main.rs`,
+  `codex-rs/cli/tests/version.rs`, and `scripts/install-local-codex.sh`.
+- Daemon lifecycle tests must isolate the installer's home and launcher paths
+  and prevent downloads of upstream executables.
 
 ### Telemetry privacy
 
