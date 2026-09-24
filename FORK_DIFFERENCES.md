@@ -1,14 +1,16 @@
 # Fork differences from upstream
 
-This file is the maintained inventory of behavior that must persist when
-`upstream/main` is merged into this fork. It is not a generated diff.
+This file is the maintained inventory of behavior that must persist when an
+upstream release is merged into this fork. It is not a generated diff.
 
 ## Current comparison
 
-- Upstream reference: `upstream/main` at `a25e986323931ec54909b0cd936b612f30c8ce46`
-- Fork reference: `main` at `7ffd9bb93`
-- Merge base: `a25e986323931ec54909b0cd936b612f30c8ce46`
-- Scope: 70 changed files, 3,518 insertions, and 873 deletions.
+- Upstream reference: `rust-v0.156.1` at `b412ff32c417f855c2b2d1581b77058eed87c84b`
+- Fork reference before merge: `main` at `6be24a90d448b9bab7f0c1e0847d0145bb1258fa`
+- Merge branch: `sync/upstream-0.156.1`
+- Merge base: `a526f54b005f0647dec041f26a67356be88b15fe`
+- Post-merge fork delta from the tag: 81 changed files, 3,945 insertions, and
+  1,070 deletions.
 
 ## Required fork behavior
 
@@ -56,8 +58,8 @@ This file is the maintained inventory of behavior that must persist when
 ## Upstream merge checklist
 
 1. Read this file before resolving conflicts.
-2. Compare `upstream/main...main` after the merge and confirm each required
-   behavior above still exists.
+2. Compare the target upstream release with the merge result and confirm each
+   required behavior above still exists.
 3. Run the affected tests, including the telemetry privacy and tool-output
    tests when those paths change.
 4. Update the comparison references, scope, ownership paths, and validation

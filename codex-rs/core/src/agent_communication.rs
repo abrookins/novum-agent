@@ -46,6 +46,7 @@ pub(crate) fn emit_agent_communication_send(
 ) {
     tracing::info!(
         target: AGENT_COMMUNICATION_TARGET,
+        parent: None,
         {
             event.name = "codex.agent_communication",
             kind = context.kind.as_str(),
@@ -60,6 +61,7 @@ pub(crate) fn emit_agent_communication_send(
 pub(crate) fn emit_agent_communication_receive() {
     tracing::info!(
         target: AGENT_COMMUNICATION_TARGET,
+        parent: None,
         {
             event.name = "codex.agent_communication",
             state = "receive",

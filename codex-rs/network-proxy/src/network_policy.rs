@@ -7,6 +7,7 @@ use crate::reasons::REASON_NOT_ALLOWED_LOCAL;
 use crate::reasons::REASON_POLICY_DENIED;
 use crate::reasons::REASON_PROXY_DISABLED;
 use crate::reasons::REASON_UNIX_SOCKET_UNSUPPORTED;
+use crate::request_cancellation::NetworkRequestCancellation;
 use crate::request_disconnect::NetworkRequestDisconnect;
 use crate::runtime::HostBlockDecision;
 use crate::runtime::HostBlockReason;
@@ -116,6 +117,8 @@ pub struct NetworkPolicyRequest {
     pub execution_id: Option<String>,
     /// Present only when the local HTTP transport can identify an abandoned request.
     pub disconnect: Option<NetworkRequestDisconnect>,
+    /// Controller-owned cause, published before an abandoned decision future is dropped.
+    pub cancellation: Option<NetworkRequestCancellation>,
 }
 
 pub struct NetworkPolicyRequestArgs {
@@ -152,6 +155,7 @@ impl NetworkPolicyRequest {
             exec_policy_hint,
             execution_id: None,
             disconnect: None,
+            cancellation: None,
         }
     }
 }
@@ -682,6 +686,8 @@ mod tests {
     use super::test_support::capture_events;
     use super::test_support::find_event_by_name;
     use super::*;
+    use crate::ExecutorLogIdentity;
+    use crate::NetworkProxyProcessLogMetadata;
     use crate::config::NetworkMode;
     use crate::config::NetworkProxyConfig;
     use crate::reasons::REASON_DENIED;
@@ -730,11 +736,21 @@ mod tests {
             ..NetworkProxyConfig::default()
         };
         let config = network;
-        let state = build_config_state(config, NetworkProxyConstraints::default()).unwrap();
+        let state = build_config_state(
+            config,
+            NetworkProxyConstraints::default(),
+            crate::Platform::native(),
+        )
+        .unwrap();
         let reloader = Arc::new(StaticReloader {
             state: state.clone(),
         });
-        NetworkProxyState::with_reloader_and_audit_metadata(state, reloader, metadata)
+        NetworkProxyState::with_reloader_and_audit_metadata(
+            state,
+            reloader,
+            metadata,
+            crate::LocalBindingPolicy::DefaultFalse,
+        )
     }
 
     fn is_rfc3339_utc_millis(timestamp: &str) -> bool {
@@ -1024,7 +1040,7 @@ mod tests {
             model: Some("canary-private-model".to_string()),
             slug: Some("canary-private-model-slug".to_string()),
         };
-        let state = state_with_metadata(metadata);
+        let mut state = state_with_metadata(metadata);
         let request = NetworkPolicyRequest::new(NetworkPolicyRequestArgs {
             protocol: NetworkProtocol::Http,
             host: "example.com".to_string(),
@@ -1036,27 +1052,46 @@ mod tests {
             exec_policy_hint: None,
         });
 
-        let (_decision, events) = capture_events(|| async {
-            evaluate_host_policy(&state, /*decider*/ None, &request)
-                .await
-                .unwrap()
-        })
-        .await;
-
-        let event = find_event_by_name(&events, POLICY_DECISION_EVENT_NAME)
-            .expect("expected policy decision audit event");
-        assert_eq!(event.field("app.version"), Some("1.2.3"));
-        assert_eq!(event.field("auth_mode"), Some("Chatgpt"));
-        assert_eq!(event.field("originator"), Some("codex_cli_rs"));
-        assert_eq!(event.field("terminal.type"), Some("iterm2"));
-        for field in [
-            "conversation.id",
-            "user.account_id",
-            "user.email",
-            "model",
-            "slug",
+        for (thread_id, _expected_conversation_id) in [
+            (None, "conversation-1"),
+            (Some("process-thread-1"), "process-thread-1"),
+            (None, "conversation-1"),
         ] {
-            assert!(!event.fields.contains_key(field));
+            state.set_process_log_metadata(NetworkProxyProcessLogMetadata {
+                thread_id: thread_id.map(str::to_string),
+                tool_call_id: Some("call-1".to_string()),
+                executor_identity: Some(ExecutorLogIdentity {
+                    environment_id: "environment-1".to_string(),
+                    registration_id: "registration-1".to_string(),
+                }),
+            });
+            let (_decision, events) = capture_events(|| async {
+                evaluate_host_policy(&state, /*decider*/ None, &request)
+                    .await
+                    .unwrap()
+            })
+            .await;
+
+            let event = find_event_by_name(&events, POLICY_DECISION_EVENT_NAME)
+                .expect("expected policy decision audit event");
+            assert_eq!(event.field("app.version"), Some("1.2.3"));
+            assert_eq!(event.field("auth_mode"), Some("Chatgpt"));
+            assert_eq!(event.field("originator"), Some("codex_cli_rs"));
+            assert_eq!(event.field("terminal.type"), Some("iterm2"));
+            for field in [
+                "launch.trace_id",
+                "launch.span_id",
+                "conversation.id",
+                "tool.call_id",
+                "executor.environment_id",
+                "executor.registration_id",
+                "user.account_id",
+                "user.email",
+                "model",
+                "slug",
+            ] {
+                assert!(!event.fields.contains_key(field));
+            }
         }
     }
 
@@ -1190,7 +1225,7 @@ mod tests {
         let state = network_proxy_state_for_policy({
             let mut network = NetworkProxyConfig::default();
             network.set_allowed_domains(vec!["example.com".to_string()]);
-            network.allow_local_binding = false;
+            network.allow_local_binding = Some(false);
             network
         });
         let request = NetworkPolicyRequest::new(NetworkPolicyRequestArgs {
