@@ -136,8 +136,17 @@ impl AgentControl for LocalAgentControl {
                             "target agent is missing an agent_path".to_string(),
                         )
                     })?;
-                    self.ensure_v2_agent_loaded(resume_config, target, /*parent*/ None)
-                        .await?;
+                    // Cold-restored children still reload lazily on any message. Only
+                    // locally evicted recipients can retain mail without reloading.
+                    // Loaded recipients go straight to delivery, which rejects sends
+                    // racing an in-progress eviction when it acquires the residency pin.
+                    if mode == MessageDeliveryMode::TriggerTurn
+                        || (self.runtime.upgrade()?.get_thread(target).await.is_err()
+                            && self.runtime.registry.evicted_environments(target).is_none())
+                    {
+                        self.ensure_v2_agent_loaded(resume_config, target, /*parent*/ None)
+                            .await?;
+                    }
                     let communication = message.into_communication(author, receiver_path, mode);
                     let kind = match mode {
                         MessageDeliveryMode::QueueOnly => {
@@ -162,6 +171,26 @@ impl AgentControl for LocalAgentControl {
                 metadata,
                 submission_id,
             })
+        })
+    }
+
+    fn take_mailbox(
+        &self,
+        agent: ThreadId,
+    ) -> Vec<codex_protocol::protocol::InterAgentCommunication> {
+        self.runtime.mailboxes.take(agent)
+    }
+
+    fn watch_mailbox(&self, agent: ThreadId) -> tokio::sync::watch::Receiver<bool> {
+        self.runtime.mailboxes.watch(agent)
+    }
+
+    fn ensure_child_loaded(&self, parent: ThreadId, child: ThreadId) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async move {
+            let parent = self.runtime.upgrade()?.get_thread(parent).await?;
+            let config = parent.session.get_config().await.as_ref().clone();
+            self.ensure_v2_agent_loaded(config, child, Some(parent))
+                .await
         })
     }
 

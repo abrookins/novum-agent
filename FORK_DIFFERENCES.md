@@ -5,10 +5,11 @@ This file is the maintained inventory of behavior that must persist when
 
 ## Current comparison
 
-- Upstream reference: `upstream/main` at `6824dabe0393337a38cb257d5fe75ae5ca168470`
-- Fork reference: the merge commit containing this inventory, based on `815b465b8`.
-- Merge base after integration: `6824dabe0393337a38cb257d5fe75ae5ca168470`
-- Scope: 83 changed files relative to upstream, including this inventory and the
+- Upstream reference: stable release `rust-v0.162.0` at
+  `c1382380de69521303b416720a52f42d51af6248`.
+- Fork reference: the merge commit containing this inventory, based on `dbcd1b92b4`.
+- Merge base after integration: `c1382380de69521303b416720a52f42d51af6248`.
+- Scope: 85 changed files relative to upstream, including this inventory and the
   local package installer.
 
 ## Required fork behavior

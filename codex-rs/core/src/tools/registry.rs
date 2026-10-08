@@ -67,14 +67,24 @@ pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
         None
     }
 
-    /// Returns lazily cached Code Mode definitions owned by this runtime.
-    fn cached_code_mode_definitions(&self) -> Option<&[codex_code_mode::ToolDefinition]> {
+    /// Returns lazily cached, augmented Code Mode definitions owned by this runtime.
+    /// Input and output schemas must be cleared after rendering their declarations.
+    fn cached_code_mode_definitions(
+        &self,
+        _code_mode_input_schema_max_bytes: Option<usize>,
+    ) -> Option<&[codex_code_mode::ToolDefinition]> {
         None
     }
 
     /// Returns a readiness wait for this exact tool before taking the execution gate.
     fn wait_until_ready<'a>(&'a self, _session: &'a Arc<Session>) -> Option<BoxFuture<'a, ()>> {
         None
+    }
+
+    /// True for MCP/app and client-supplied dynamic tools.
+    /// A built-in stays false even if a client's tool has the same name.
+    fn is_third_party_tool(&self) -> bool {
+        false
     }
 
     /// Returns the owning server only for MCP-backed tool runtimes.
@@ -519,6 +529,13 @@ impl ToolRegistry {
         self.tools.values_mut()
     }
 
+    /// Returns configured MCP server names and their registered callable namespaces.
+    pub(crate) fn mcp_namespaces(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.tools.iter().filter_map(|(name, tool)| {
+            Some((tool.runtime.mcp_server_name()?, name.namespace.as_deref()?))
+        })
+    }
+
     pub(crate) fn deferred_tool_namespaces(&self) -> BTreeMap<String, String> {
         let mut namespaces = BTreeMap::<String, String>::new();
         for (name, tool) in &self.tools {
@@ -609,7 +626,11 @@ impl ToolRegistry {
     ) -> Result<AnyToolResult, FunctionCallError> {
         let tool_name = invocation.tool_name.clone();
         let call_id_owned = invocation.call_id.clone();
-        let otel = invocation.step_context.session_telemetry.clone();
+        let otel = invocation
+            .step_context
+            .session_telemetry
+            .clone()
+            .with_product_sku(invocation.turn.config.apps_mcp_product_sku.as_deref());
         // TODO(anp): Reconcile these tags with TurnEnvironment::sandbox_context
         // instead of reporting the thread-wide backend for environment-scoped tools.
         let sandbox_tags = invocation.turn.turn_metadata_state.sandbox_tags;
@@ -894,12 +915,7 @@ async fn handle_any_tool(
         truncation_policy,
         post_tool_use_payload,
     };
-    // Capture confirmed delivery before any further await, including post-tool hooks.
-    if let Some(call_state) = call_state
-        && let Some(text) = result.delivered_assistant_message()
-    {
-        let _ = call_state.delivered_assistant_message.set(text);
-    }
+    super::user_messaging::capture_delivery(&result, call_state);
     result.result = recover_oversized_output(
         result.result,
         &result.payload,
