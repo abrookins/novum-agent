@@ -1,3 +1,15 @@
+# Novum Agent
+
+This is Andrew Brookins's Codex fork. For the macOS Apple Silicon release,
+follow [the agent installation instructions](FORK_INSTRUCTIONS.md). They install
+the matching CLI and Code Mode host from this fork's release assets.
+
+See [fork differences](FORK_DIFFERENCES.md) for telemetry privacy and recoverable
+tool output changes. The instructions below describe the upstream OpenAI product;
+its installers do not install this fork.
+
+---
+
 <p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
 <p align="center">
   <img src="https://github.com/openai/codex/blob/main/.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />

@@ -23,8 +23,10 @@ case "$(uname -s)/$(uname -m)" in
 esac
 
 revision="$(git rev-parse --short HEAD)"
+export STABLE_GIT_COMMIT="$(git rev-parse HEAD)"
 if ! git diff --quiet HEAD; then
   revision="${revision}-dirty"
+  export STABLE_GIT_COMMIT="${STABLE_GIT_COMMIT}-dirty"
   echo "warning: working tree is dirty; installing as ${revision}" >&2
 fi
 package_dir="${PREFIX}/libexec/${PACKAGE_NAME}/${revision}"

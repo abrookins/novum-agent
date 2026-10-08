@@ -7,12 +7,26 @@ This file is the maintained inventory of behavior that must persist when
 
 - Upstream reference: stable release `rust-v0.162.0` at
   `c1382380de69521303b416720a52f42d51af6248`.
-- Fork reference: the merge commit containing this inventory, based on `dbcd1b92b4`.
+- Fork references: local `main` at `dbcd1b92b4` and installed release
+  `novum-v0.2.0` at `2248c2b6e9733cf9f92343f6147af6dd549b087e`.
 - Merge base after integration: `c1382380de69521303b416720a52f42d51af6248`.
-- Scope: 85 changed files relative to upstream, including this inventory and the
+- Scope: 97 changed files relative to upstream, including this inventory and the
   local package installer.
 
 ## Required fork behavior
+
+### Release identity and installation
+
+- Preserve the fork installation link in `README.md` and the agent procedure in
+  `FORK_INSTRUCTIONS.md`.
+- `codex -V` reports the package version; `codex --version` also reports Novum
+  and the compiled commit. Use independent `novum-v<version>` release tags.
+- Package the CLI and Code Mode host together. Preserve package metadata and
+  bundled resources when installing prebuilt release assets.
+- Main ownership paths: `codex-rs/cli/src/main.rs`,
+  `codex-rs/cli/tests/version.rs`, and `scripts/install-local-codex.sh`.
+- Daemon lifecycle tests must isolate the installer's home and launcher paths
+  and prevent downloads of upstream executables.
 
 ### Telemetry privacy
 
